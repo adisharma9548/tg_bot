@@ -1,42 +1,50 @@
-# Don't Remove Credit Tg - @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
-# Ask Doubt on telegram @KingVJ01
-
 import os
 
-# Login feature, if you want then True , if you don't want then False
-LOGIN_SYSTEM = bool(os.environ.get('LOGIN_SYSTEM', True)) # True or False
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-if LOGIN_SYSTEM == False:
-    # if login system is False then fill your tg account session below 
-    STRING_SESSION = os.environ.get("STRING_SESSION", "")
+# Login feature: True enables /login inside bot; False requires STRING_SESSION
+login_sys_str = os.environ.get('LOGIN_SYSTEM', 'True').strip().lower()
+LOGIN_SYSTEM = login_sys_str in ('true', '1', 'yes')
+
+if not LOGIN_SYSTEM:
+    STRING_SESSION = os.environ.get("STRING_SESSION", "").strip()
 else:
     STRING_SESSION = None
 
-# Bot token @Botfather
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+# Bot token from @BotFather
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 
-# Your API ID from my.telegram.org
-API_ID = int(os.environ.get("API_ID", ""))
+# Telegram API credentials from https://my.telegram.org
+api_id_val = os.environ.get("API_ID", "").strip()
+API_ID = int(api_id_val) if api_id_val.isdigit() else 0
 
-# Your API Hash from my.telegram.org
-API_HASH = os.environ.get("API_HASH", "")
+API_HASH = os.environ.get("API_HASH", "").strip()
 
-# Your Owner / Admin Id For Broadcast 
-ADMINS = int(os.environ.get("ADMINS", "6073523936"))
+# Admin Username / ID (Configured for @No_MOORESINPS)
+admins_val = os.environ.get("ADMINS", "No_MOORESINPS").strip()
+if admins_val:
+    if admins_val.isdigit():
+        ADMINS = int(admins_val)
+    else:
+        ADMINS = admins_val.lstrip("@")
+else:
+    ADMINS = "No_MOORESINPS"
 
-# Your Channel Id In Which Bot Upload Downloaded Video/File/Message etc.
-# And Make Your Bot Admin In this channel with full rights.
-# if you don't want to upload in channel then leave it blank don't fill anything.
-CHANNEL_ID = os.environ.get("CHANNEL_ID", "")
+# Optional Channel ID to upload downloaded content to (leave blank to send directly to user)
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
-# Your Mongodb Database Url
-# Warning - Give Db uri in deploy server environment variable, don't give in repo.
-DB_URI = os.environ.get("DB_URI", "") # Warning - Give Db uri in deploy server environment variable, don't give in repo.
-DB_NAME = os.environ.get("DB_NAME", "vjsavecontentbot")
+# Database: Leave DB_URI blank to use local SQLite database on your device (database/bot.db)
+DB_URI = os.environ.get("DB_URI", "").strip()
+DB_NAME = os.environ.get("DB_NAME", "theaditya_db").strip()
 
-# Increase time as much as possible to avoid floodwait, spamming and tg account ban issues.
-WAITING_TIME = int(os.environ.get("WAITING_TIME", "10")) # time in seconds
+# Delay in seconds to prevent Telegram flood wait limits
+wait_time_val = os.environ.get("WAITING_TIME", "10").strip()
+WAITING_TIME = int(wait_time_val) if wait_time_val.isdigit() else 10
 
-# If You Want Error Message In Your Personal Message Then Turn It True Else If You Don't Want Then Flase
-ERROR_MESSAGE = bool(os.environ.get('ERROR_MESSAGE', True))
+# Send error messages in chat
+err_msg_val = os.environ.get('ERROR_MESSAGE', 'True').strip().lower()
+ERROR_MESSAGE = err_msg_val in ('true', '1', 'yes')

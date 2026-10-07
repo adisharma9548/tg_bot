@@ -1,7 +1,3 @@
-# Don't Remove Credit Tg - @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
-# Ask Doubt on telegram @KingVJ01
-
 from pyrogram.errors import InputUserDeactivated, UserNotParticipant, FloodWait, UserIsBlocked, PeerIdInvalid
 from database.db import db
 from pyrogram import Client, filters
@@ -26,30 +22,44 @@ async def broadcast_messages(user_id, message):
     except PeerIdInvalid:
         await db.delete_user(int(user_id))
         return False, "Error"
-    except Exception as e:
+    except Exception:
         return False, "Error"
 
 
-@Client.on_message(filters.command("broadcast") & filters.user(ADMINS) & filters.reply)
+@Client.on_message(filters.command("broadcast") & filters.private)
 async def broadcast(bot, message):
-    users = await db.get_all_users()
+    if not ADMINS:
+        return await message.reply_text("❌ **Broadcasting is disabled because no ADMIN is set.**")
+
+    # Check if sender is admin
+    user = message.from_user
+    is_admin = False
+    if isinstance(ADMINS, int) and user.id == ADMINS:
+        is_admin = True
+    elif isinstance(ADMINS, str) and user.username and user.username.lower() == ADMINS.lower():
+        is_admin = True
+
+    if not is_admin:
+        return await message.reply_text("⛔ **Access Denied:** You are not authorized to use admin broadcast.")
+
     b_msg = message.reply_to_message
     if not b_msg:
-        return await message.reply_text("**Reply This Command To Your Broadcast Message**")
-    sts = await message.reply_text(
-        text='Broadcasting your messages...'
-    )
+        return await message.reply_text("📝 **Reply with /broadcast to the message you want to broadcast.**")
+
+    sts = await message.reply_text("📢 **Broadcasting your message to all bot users...**")
     start_time = time.time()
     total_users = await db.total_users_count()
+    users = await db.get_all_users()
+
     done = 0
     blocked = 0
     deleted = 0
-    failed =0
-
+    failed = 0
     success = 0
-    async for user in users:
-        if 'id' in user:
-            pti, sh = await broadcast_messages(int(user['id']), b_msg)
+
+    async for u in users:
+        if 'id' in u:
+            pti, sh = await broadcast_messages(int(u['id']), b_msg)
             if pti:
                 success += 1
             elif pti == False:
@@ -61,17 +71,25 @@ async def broadcast(bot, message):
                     failed += 1
             done += 1
             if not done % 20:
-                await sts.edit(f"Broadcast in progress:\n\nTotal Users {total_users}\nCompleted: {done} / {total_users}\nSuccess: {success}\nBlocked: {blocked}\nDeleted: {deleted}")    
+                await sts.edit(
+                    f"📢 **Broadcast in progress:**\n\n"
+                    f"• Total Users: `{total_users}`\n"
+                    f"• Processed: `{done} / {total_users}`\n"
+                    f"• Success: `{success}`\n"
+                    f"• Blocked: `{blocked}`\n"
+                    f"• Deleted: `{deleted}`"
+                )
         else:
-            # Handle the case where 'id' key is missing in the user dictionary
             done += 1
             failed += 1
-            if not done % 20:
-                await sts.edit(f"Broadcast in progress:\n\nTotal Users {total_users}\nCompleted: {done} / {total_users}\nSuccess: {success}\nBlocked: {blocked}\nDeleted: {deleted}")    
-    
-    time_taken = datetime.timedelta(seconds=int(time.time()-start_time))
-    await sts.edit(f"Broadcast Completed:\nCompleted in {time_taken} seconds.\n\nTotal Users {total_users}\nCompleted: {done} / {total_users}\nSuccess: {success}\nBlocked: {blocked}\nDeleted: {deleted}")
 
-# Don't Remove Credit @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
+    time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
+    await sts.edit(
+        f"✅ **Broadcast Completed!**\n"
+        f"⏱️ Time taken: `{time_taken}`\n\n"
+        f"• Total Users: `{total_users}`\n"
+        f"• Success: `{success}`\n"
+        f"• Blocked: `{blocked}`\n"
+        f"• Deleted: `{deleted}`\n"
+        f"• Failed: `{failed}`"
+    )

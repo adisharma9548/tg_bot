@@ -28,7 +28,7 @@ class Bot(Client):
     async def start(self):
             
         await super().start()
-        print('Bot Started Powered By @VJ_Bots')
+        print('Bot Started Successfully')
 
     async def stop(self, *args):
 
@@ -36,6 +36,12 @@ class Bot(Client):
         print('Bot Stopped Bye')
 
 if __name__ == "__main__":
+    if not API_ID or not API_HASH or not BOT_TOKEN:
+        print("\n" + "=" * 60)
+        print(" [!] Missing required configuration!")
+        print(" Please provide API_ID, API_HASH, and BOT_TOKEN in your .env file.")
+        print("=" * 60 + "\n")
+        exit(1)
     bot = Bot()
     bot.run()
 

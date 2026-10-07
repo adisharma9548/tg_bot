@@ -1,85 +1,150 @@
-
 <p align="center">
-  <img src="https://i.ibb.co/dJ0gpJf1/photo-2025-06-16-12-07-05-7516517596376596504.jpg" alt="VJ Save Restricted Bot Logo">
+  <img src="logo.jpg" alt="My Aditya Logo" width="220" style="border-radius: 24px; box-shadow: 0 4px 20px rgba(255, 140, 0, 0.4);">
 </p>
-<h1 align="center">
-  VJ Save Restricted Bot
-</h1>
 
+# 🚀 My Aditya — Save Restricted Content Bot
 
-*A Telegram Bot, Which Can Send You Restricted Content By It's Post Link With <b>Login Feature.</b>*
-
-*Added **TG Account Protection** Security To Prevent Account From Ban Issue, Not Totally But Now TG Account Ban Chance Is Low.*
+A high-performance Telegram bot powered by **Pyrofork** and **SQLite**, designed to save, forward, clean, and manage restricted media and files from Telegram channels, groups, and external websites.
 
 ---
 
-<b>Watch Video Tutorial - [Click Here](https://youtu.be/BFEvSX5vIMg)</b>
+## 👑 Bot Administration
+* **Admin**: `@No_MOORESINPS`
+* **Storage Engine**: Local SQLite Database (`database/bot.db`) stored directly on host device (Zero cloud DB setup required).
 
 ---
 
-## Variables
+## 🌟 Key Features
 
-- `LOGIN_SYSTEM` : Set True or False As per your need.
-- `STRING_SESSION` : Your Tg Account Session String, if login is False then this variable is compulsory to fill. ( ⚠️ Warning - Give string session on deploy website environment variable, don't give in repo )
-- `API_HASH` : Your API Hash From [Telegram Website](https://my.telegram.org) Watch [Video Tutorial](https://youtu.be/LDtgwpI-N7M)
-- `API_ID` : Your API ID From [Telegram Website](https://my.telegram.org) Watch [Video Tutorial](https://youtu.be/LDtgwpI-N7M)
-- `BOT_TOKEN` : Your Bot Token From [BotFather](https://telegram.me/BotFather) ( ⚠️ Warning - Give Bot Token on deploy website environment variable, don't give in repo )
-- `ADMINS` : Your Admin Id For Broadcasting Message
-- `CHANNEL_ID` : Your Channel Id On Which Bot Upload Downloaded Content. ( And Make Your Bot Admin In This Channel With Full Rights )
-- `DB_URI` : Your Mongodb Database Url From [Mongodb](https://mongodb.com) Watch [Video Tutorial](https://youtu.be/DAHRmFdw99o) ( ⚠️ Warning - Give Db Url on deploy website environment variable, don't give in repo )
-- `WAITING_TIME` : Increase Time To Avoid Spamming, Floodwait and Tg Account Ban Issue.
-- `ERROR_MESSAGE` : Set True Or False, If You Want Error Message Then True Else False.
+### 1. 🗂️ Universal File Type Support
+Download and forward **any** content shared in Telegram channels or chats:
+* **Documents & Archives**: `.pdf`, `.zip`, `.rar`, `.apk`, `.epub`, `.iso`, `.exe`, `.tar.gz`, etc.
+* **Videos**: `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov`
+* **Audio & Music**: `.mp3`, `.m4a`, `.flac`, `.wav`, `.aac`
+* **Media**: Photos, Voice Notes, Animations (GIFs), Stickers, and Text.
+
+### 2. 🧹 Automatic Filename Cleaner & Ad Remover (Always ON)
+Cleans all downloaded files automatically before re-uploading:
+* Strips annoying promo tags like:
+  * `cracked by...`
+  * `extracted by...`
+  * `downloaded from...`
+  * `uploaded by...`
+  * `shared by...`
+  * `provided by...`
+* Strips `@channel_usernames` and website URLs (`https://...`, `t.me/...`, `www...`).
+* Normalizes repeated separators (`___`, `---`, `...`).
+* Optional custom prefix support (`/set_prefix [Course]`).
+* Optional custom word removal rules (`/replace <word>`).
+
+### 3. 🔄 Batch Auto-Resume (`/resume`)
+* Never lose progress on large multi-file batches (e.g., 50–100 posts).
+* Each completed post ID is continuously saved in `database/bot.db`.
+* If a download is interrupted by internet drop or system restart, send `/resume` to immediately pick up from the last finished file.
+
+### 4. 🌐 External Web Downloader (`yt-dlp`)
+* Paste any web URL into the chat to download and upload directly:
+  * **YouTube** Videos and Shorts
+  * **Instagram** Reels and Posts
+  * **Twitter / X** Videos
+  * Direct web media links
+
+### 5. ⚡ Live In-Memory Progress Bar
+* Real-time progress bar with percentage, speed (`MB/s`), downloaded size, and ETA.
+* Strictly in-memory to prevent disk I/O load.
+* Throttled updates to prevent Telegram API `FloodWait` limits.
+
+### 6. 🎨 Custom Thumbnail & Caption System
+* **`/set_thumb`**: Reply to any image to set it as the custom thumbnail for all videos and documents.
+* **`/set_caption`**: Custom caption templates with dynamic tags:
+  * `{filename}` — Cleaned filename
+  * `{size}` — Human-readable size
+  * `{caption}` — Original post caption
+
+### 7. ⚙️ User Preference Controls & Chat Management
+* **`/clear`**: One-click two-sided chat cleanup — deletes all messages in the conversation from both sides (bot & user), leaving the chat clean.
+* **`/reset`**: Reset all user settings (thumbnails, captions, prefix, upload mode) to defaults.
+* **`/mode`**: Toggle between **Video Mode** (streamable inline) and **Document Mode** (100% original uncompressed quality).
+* **`/silent`**: Toggle silent upload delivery (`disable_notification=True`).
+* **`/to_saved`**: Route downloads directly to your personal **Saved Messages** cloud storage.
+* **`/status`**: Dashboard displaying account status, active toggles, and host PC disk space.
+
+### 8. 📚 Universal Course Organizer & Forum Topic Crawler (`/topic`)
+* **Forum Topic Support**: Supports 3-part Telegram forum links: `https://t.me/c/<chat_id>/<topic_id>/<message_id>`.
+* **Topic Crawler (`/topic <link>`)**: Automatically discovers all media inside a forum topic thread, sorts them chronologically by lecture and part, and transfers them with 0 missing files.
+* **Universal Naming**: Dynamically extracts master sequence numbers (`✦ 300 ✦`, `#300`), subject titles across any course, and parts (`Part 1`, `Part 2`):
+  * `[300] EM - Lecture 6 (Vector Calculus) - Part 1.mp4`
+  * `[300] EM - Lecture 6 (Vector Calculus) - Part 2.mp4`
+  * `[301] EM - Lecture 7.mp4`
+* **Audit Summary Report**: Generates a sequential verification checklist upon transfer completion.
 
 ---
 
-## Commands
+## 📋 Full Command Reference
 
-- `/start` : Check Bot Is Working Or Not
-- `/help` : Check How To Use Bot
-- `/login` : Login Your Telegram String Session 
-- `/logout` : Logout Your Session 
-- `/cancel` : Cancel Your Any Ongoing Task
-- `/broadcast` : Broadcast Message To User (Admin Only)
+| Command | Description |
+| :--- | :--- |
+| `/start` | Check bot status and welcome message |
+| `/help` | Display interactive help menu |
+| `/login` | Connect your Telegram user account session |
+| `/logout` | Disconnect and clear user session |
+| `/cancel` | Stop any active batch download |
+| `/clear` | Clear chat history from both sides in one click |
+| `/reset` | Reset all custom settings, captions & thumbnails |
+| `/resume` | Resume an interrupted batch download |
+| `/topic <link>` | Crawl and transfer an entire forum topic in sequence with audit report |
+| `/status` | View host disk space, account status & active settings |
+| `/mode` | Toggle upload format: Video vs. Document |
+| `/silent` | Toggle silent notifications ON/OFF |
+| `/to_saved` | Toggle delivery between Saved Messages and Bot Chat |
+| `/set_prefix <text>` | Add custom prefix to all filenames |
+| `/del_prefix` | Remove custom prefix |
+| `/replace <words>` | Add custom words to strip from filenames |
+| `/del_replace` | Clear custom removal words |
+| `/set_thumb` | Reply to an image to set custom thumbnail |
+| `/see_thumb` | View current custom thumbnail |
+| `/del_thumb` | Revert to original thumbnail |
+| `/set_caption <text>` | Set custom caption template |
+| `/see_caption` | View current custom caption |
+| `/del_caption` | Revert to original post caption |
+| `/broadcast` | *(Admin Only - @No_MOORESINPS)* Broadcast a message to all users |
 
 ---
 
-## Usage
+## 🛠️ Installation & Running Locally
 
-__FOR PUBLIC CHATS__
+### 1. Requirements
+* Python 3.9 – 3.14
+* Git
 
-_just send post/s link_
-
-
-__FOR PRIVATE CHATS__
-
-_first send invite link of the chat (unnecessary if the account of string session already member of the chat)
-then send post/s link_
-
-
-__FOR BOT CHATS__
-
-_send link with '/b/', bot's username and message id, you might want to install some unofficial client (like - Plus Messenger) to get the id like below_
-
+### 2. Setup
+```powershell
+cd c:\Users\adish\Desktop\bot\theaditya
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 ```
-https://t.me/b/botusername/4321
+
+### 3. Configuration (`.env`)
+Fill in your credentials in [.env](file:///c:/Users/adish/Desktop/bot/theaditya/.env):
+```env
+API_ID=your_api_id
+API_HASH=your_api_hash
+BOT_TOKEN=your_bot_token
+ADMINS=No_MOORESINPS
+LOGIN_SYSTEM=True
+WAITING_TIME=10
+ERROR_MESSAGE=True
 ```
 
-__MULTI POSTS__
-
-_send public/private posts link as explained above with formate "from - to" to send multiple messages like below_
-
-
+### 4. Start the Bot
+```powershell
+python bot.py
 ```
-https://t.me/xxxx/1001-1010
-
-https://t.me/c/xxxx/101 - 120
-```
-
-_note that space in between doesn't matter_
 
 ---
 
-## Credits
-
-- <b>Thanks To [BipinKrish](https://github.com/bipinkrish) For Base Repo
-- Thanks To [Tech VJ](https://github.com/VJBots) For Modification.</b>
+## 🔒 Security & Privacy
+* All user sessions and configurations are kept strictly on your local PC in `database/bot.db`.
+* Downloaded files are placed in an isolated `downloads/` directory and **automatically deleted immediately after upload**.
+* `.env`, `.db`, `.session`, and `downloads/` are strictly ignored by `.gitignore`.
