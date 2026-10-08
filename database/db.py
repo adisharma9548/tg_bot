@@ -2,10 +2,302 @@ import os
 import sqlite3
 import asyncio
 import threading
-from config import DB_NAME, DB_URI
+import datetime
+import logging
+from config import (
+    MONGODB_URI,
+    DB_NAME,
+    USERS_COLLECTION,
+    BATCH_TASKS_COLLECTION,
+    mask_mongodb_uri
+)
+
+logger = logging.getLogger("Database")
+
+
+class MongoDatabase:
+    """Production Asynchronous MongoDB Database for Telegram Bot."""
+
+    def __init__(self, uri: str, database_name: str):
+        import motor.motor_asyncio
+        self.uri = uri
+        self.database_name = database_name or "sih26044"
+        self._client = motor.motor_asyncio.AsyncIOMotorClient(
+            self.uri,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+            maxPoolSize=50
+        )
+        self.db = self._client[self.database_name]
+        self.users_col = self.db[USERS_COLLECTION]
+        self.batch_tasks_col = self.db[BATCH_TASKS_COLLECTION]
+
+    async def ping(self) -> bool:
+        """Verifies MongoDB connectivity."""
+        try:
+            res = await self.db.command("ping")
+            return bool(res and res.get("ok") == 1)
+        except Exception as e:
+            logger.error(f"MongoDB ping failed: {e}")
+            raise
+
+    async def create_indexes(self):
+        """Creates indexes for fast queries and data uniqueness."""
+        try:
+            # Users indexes
+            await self.users_col.create_index([("id", 1)], unique=True)
+            await self.users_col.create_index([("session", 1)], sparse=True)
+            # Batch tasks indexes
+            await self.batch_tasks_col.create_index([("user_id", 1)], unique=True)
+            logger.info("MongoDB indexes verified/created successfully.")
+        except Exception as e:
+            logger.warning(f"Error creating MongoDB indexes: {e}")
+
+    async def close(self):
+        """Gracefully closes MongoDB connections."""
+        try:
+            self._client.close()
+            logger.info("MongoDB client connection closed.")
+        except Exception:
+            pass
+
+    # ------------------ User Management ------------------
+
+    async def add_user(self, id: int, name: str):
+        """Idempotently adds a user or updates their name without overwriting settings."""
+        await self.users_col.update_one(
+            {"_id": int(id)},
+            {
+                "$set": {
+                    "name": str(name or ""),
+                    "updated_at": datetime.datetime.now(datetime.timezone.utc)
+                },
+                "$setOnInsert": {
+                    "id": int(id),
+                    "session": None,
+                    "api_id": None,
+                    "api_hash": None,
+                    "thumb": None,
+                    "caption": None,
+                    "upload_as_doc": 0,
+                    "silent_mode": 0,
+                    "to_saved": 0,
+                    "prefix": None,
+                    "removals": None,
+                    "created_at": datetime.datetime.now(datetime.timezone.utc)
+                }
+            },
+            upsert=True
+        )
+
+    async def is_user_exist(self, id: int) -> bool:
+        """Checks if a user exists in the database."""
+        doc = await self.users_col.find_one({"_id": int(id)}, {"_id": 1})
+        return doc is not None
+
+    async def total_users_count(self) -> int:
+        """Returns total registered bot users count."""
+        return await self.users_col.count_documents({})
+
+    async def get_all_users(self):
+        """Asynchronous generator yielding all registered user documents."""
+        cursor = self.users_col.find({})
+        async for doc in cursor:
+            if "id" not in doc:
+                doc["id"] = doc["_id"]
+            yield doc
+
+    async def delete_user(self, user_id: int):
+        """Deletes user record and associated batch tasks."""
+        await self.users_col.delete_one({"_id": int(user_id)})
+        await self.batch_tasks_col.delete_one({"_id": int(user_id)})
+
+    async def _set_field(self, id: int, field: str, value):
+        """Atomic upsert helper for updating a single field on a user document."""
+        await self.users_col.update_one(
+            {"_id": int(id)},
+            {
+                "$set": {
+                    field: value,
+                    "updated_at": datetime.datetime.now(datetime.timezone.utc)
+                },
+                "$setOnInsert": {
+                    "id": int(id),
+                    "created_at": datetime.datetime.now(datetime.timezone.utc)
+                }
+            },
+            upsert=True
+        )
+
+    async def _get_field(self, id: int, field: str):
+        """Helper to retrieve a single field value from a user document."""
+        doc = await self.users_col.find_one({"_id": int(id)}, {field: 1})
+        if doc and doc.get(field) is not None:
+            return doc[field]
+        return None
+
+    # ------------------ Session Management ------------------
+
+    async def set_session(self, id: int, session: str):
+        await self._set_field(id, "session", session)
+
+    async def get_session(self, id: int):
+        return await self._get_field(id, "session")
+
+    async def set_api_id(self, id: int, api_id):
+        val = int(api_id) if api_id is not None and str(api_id).strip() != "" else None
+        await self._set_field(id, "api_id", val)
+
+    async def get_api_id(self, id: int):
+        return await self._get_field(id, "api_id")
+
+    async def set_api_hash(self, id: int, api_hash: str):
+        await self._set_field(id, "api_hash", api_hash)
+
+    async def get_api_hash(self, id: int):
+        return await self._get_field(id, "api_hash")
+
+    async def get_other_sessions(self, exclude_user_id: int = None):
+        """
+        Retrieves active sessions from all users except exclude_user_id.
+        Enables multi-account session fallback without requiring SQLite.
+        """
+        query = {"session": {"$nin": [None, ""]}}
+        if exclude_user_id:
+            query["_id"] = {"$ne": int(exclude_user_id)}
+
+        results = []
+        cursor = self.users_col.find(query, {"id": 1, "_id": 1, "session": 1, "api_id": 1, "api_hash": 1})
+        async for doc in cursor:
+            uid = doc.get("id", doc.get("_id"))
+            results.append((
+                int(uid),
+                doc.get("session"),
+                doc.get("api_id"),
+                doc.get("api_hash")
+            ))
+        return results
+
+    # ------------------ Custom Thumbnail ------------------
+
+    async def set_thumb(self, id: int, thumb_path: str):
+        await self._set_field(id, "thumb", thumb_path)
+
+    async def get_thumb(self, id: int):
+        return await self._get_field(id, "thumb")
+
+    async def del_thumb(self, id: int):
+        await self._set_field(id, "thumb", None)
+
+    # ------------------ Custom Caption ------------------
+
+    async def set_caption(self, id: int, caption: str):
+        await self._set_field(id, "caption", caption)
+
+    async def get_caption(self, id: int):
+        return await self._get_field(id, "caption")
+
+    async def del_caption(self, id: int):
+        await self._set_field(id, "caption", None)
+
+    # ------------------ Mode Toggles ------------------
+
+    async def set_upload_mode(self, id: int, as_doc: bool):
+        await self._set_field(id, "upload_as_doc", 1 if as_doc else 0)
+
+    async def get_upload_mode(self, id: int) -> bool:
+        val = await self._get_field(id, "upload_as_doc")
+        return bool(val)
+
+    async def set_silent(self, id: int, silent: bool):
+        await self._set_field(id, "silent_mode", 1 if silent else 0)
+
+    async def get_silent(self, id: int) -> bool:
+        val = await self._get_field(id, "silent_mode")
+        return bool(val)
+
+    async def set_to_saved(self, id: int, to_saved: bool):
+        await self._set_field(id, "to_saved", 1 if to_saved else 0)
+
+    async def get_to_saved(self, id: int) -> bool:
+        val = await self._get_field(id, "to_saved")
+        return bool(val)
+
+    # ------------------ Filename Prefix & Cleaning ------------------
+
+    async def set_prefix(self, id: int, prefix: str):
+        await self._set_field(id, "prefix", prefix)
+
+    async def get_prefix(self, id: int):
+        return await self._get_field(id, "prefix")
+
+    async def del_prefix(self, id: int):
+        await self._set_field(id, "prefix", None)
+
+    async def set_removals(self, id: int, removals: str):
+        await self._set_field(id, "removals", removals)
+
+    async def get_removals(self, id: int):
+        raw = await self._get_field(id, "removals")
+        if not raw:
+            return []
+        return [w.strip() for w in raw.split(",") if w.strip()]
+
+    async def del_removals(self, id: int):
+        await self._set_field(id, "removals", None)
+
+    # ------------------ Batch Tasks (/resume) ------------------
+
+    async def save_batch_task(self, user_id: int, link_prefix: str, from_id: int, to_id: int, last_id: int, chat_id, task_type: str):
+        await self.batch_tasks_col.update_one(
+            {"_id": int(user_id)},
+            {
+                "$set": {
+                    "user_id": int(user_id),
+                    "link_prefix": link_prefix,
+                    "from_id": int(from_id),
+                    "to_id": int(to_id),
+                    "last_id": int(last_id),
+                    "chat_id": str(chat_id),
+                    "task_type": str(task_type),
+                    "updated_at": datetime.datetime.now(datetime.timezone.utc)
+                }
+            },
+            upsert=True
+        )
+
+    async def get_batch_task(self, user_id: int):
+        doc = await self.batch_tasks_col.find_one({"_id": int(user_id)})
+        if doc:
+            doc["id"] = doc["_id"]
+            return doc
+        return None
+
+    async def clear_batch_task(self, user_id: int):
+        await self.batch_tasks_col.delete_one({"_id": int(user_id)})
+
+    async def clear_all_user_settings(self, user_id: int):
+        """Resets all custom settings for a user back to factory defaults."""
+        await self.users_col.update_one(
+            {"_id": int(user_id)},
+            {
+                "$set": {
+                    "thumb": None,
+                    "caption": None,
+                    "upload_as_doc": 0,
+                    "silent_mode": 0,
+                    "to_saved": 0,
+                    "prefix": None,
+                    "removals": None,
+                    "updated_at": datetime.datetime.now(datetime.timezone.utc)
+                }
+            }
+        )
+        await self.batch_tasks_col.delete_one({"_id": int(user_id)})
+
 
 class SQLiteDatabase:
-    """Local SQLite database stored directly on this device."""
+    """Local SQLite database fallback for offline local development only."""
     def __init__(self, db_path="database/bot.db"):
         self.db_path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
@@ -39,20 +331,6 @@ class SQLiteDatabase:
                             removals TEXT
                         )
                     """)
-                    for col_name, col_type in [
-                        ("thumb", "TEXT"),
-                        ("caption", "TEXT"),
-                        ("upload_as_doc", "INTEGER DEFAULT 0"),
-                        ("silent_mode", "INTEGER DEFAULT 0"),
-                        ("to_saved", "INTEGER DEFAULT 0"),
-                        ("prefix", "TEXT"),
-                        ("removals", "TEXT")
-                    ]:
-                        try:
-                            conn.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
-                        except sqlite3.OperationalError:
-                            pass
-
                     conn.execute("""
                         CREATE TABLE IF NOT EXISTS batch_tasks (
                             user_id INTEGER PRIMARY KEY,
@@ -68,21 +346,14 @@ class SQLiteDatabase:
             finally:
                 conn.close()
 
-    def new_user(self, id, name):
-        return dict(
-            id=id,
-            name=name,
-            session=None,
-            api_id=None,
-            api_hash=None,
-            thumb=None,
-            caption=None,
-            upload_as_doc=0,
-            silent_mode=0,
-            to_saved=0,
-            prefix=None,
-            removals=None
-        )
+    async def ping(self) -> bool:
+        return True
+
+    async def create_indexes(self):
+        pass
+
+    async def close(self):
+        pass
 
     def _add_user(self, id, name):
         with self._lock:
@@ -141,10 +412,8 @@ class SQLiteDatabase:
 
     async def get_all_users(self):
         users_list = await asyncio.to_thread(self._get_all_users_list)
-        async def _async_gen():
-            for u in users_list:
-                yield u
-        return _async_gen()
+        for u in users_list:
+            yield u
 
     def _delete_user(self, user_id):
         with self._lock:
@@ -200,7 +469,19 @@ class SQLiteDatabase:
     async def get_api_hash(self, id):
         return await asyncio.to_thread(self._get_field, id, "api_hash")
 
-    # Custom Thumbnail
+    def _get_other_sessions(self, exclude_user_id):
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT id, session, api_id, api_hash FROM users WHERE session IS NOT NULL AND id != ?", (int(exclude_user_id),))
+                return [(r["id"], r["session"], r["api_id"], r["api_hash"]) for r in cur.fetchall()]
+            finally:
+                conn.close()
+
+    async def get_other_sessions(self, exclude_user_id: int):
+        return await asyncio.to_thread(self._get_other_sessions, exclude_user_id)
+
     async def set_thumb(self, id, thumb_path):
         await asyncio.to_thread(self._set_field, id, "thumb", thumb_path)
 
@@ -210,7 +491,6 @@ class SQLiteDatabase:
     async def del_thumb(self, id):
         await asyncio.to_thread(self._set_field, id, "thumb", None)
 
-    # Custom Caption
     async def set_caption(self, id, caption):
         await asyncio.to_thread(self._set_field, id, "caption", caption)
 
@@ -220,7 +500,6 @@ class SQLiteDatabase:
     async def del_caption(self, id):
         await asyncio.to_thread(self._set_field, id, "caption", None)
 
-    # Upload Mode (0 = Video, 1 = Document)
     async def set_upload_mode(self, id, as_doc: bool):
         await asyncio.to_thread(self._set_field, id, "upload_as_doc", 1 if as_doc else 0)
 
@@ -228,7 +507,6 @@ class SQLiteDatabase:
         val = await asyncio.to_thread(self._get_field, id, "upload_as_doc")
         return bool(val)
 
-    # Silent Mode (0 = Sound, 1 = Silent)
     async def set_silent(self, id, silent: bool):
         await asyncio.to_thread(self._set_field, id, "silent_mode", 1 if silent else 0)
 
@@ -236,7 +514,6 @@ class SQLiteDatabase:
         val = await asyncio.to_thread(self._get_field, id, "silent_mode")
         return bool(val)
 
-    # Send to Saved Messages (0 = Bot Chat, 1 = Saved Messages)
     async def set_to_saved(self, id, to_saved: bool):
         await asyncio.to_thread(self._set_field, id, "to_saved", 1 if to_saved else 0)
 
@@ -244,7 +521,6 @@ class SQLiteDatabase:
         val = await asyncio.to_thread(self._get_field, id, "to_saved")
         return bool(val)
 
-    # Custom Filename Prefix
     async def set_prefix(self, id, prefix: str):
         await asyncio.to_thread(self._set_field, id, "prefix", prefix)
 
@@ -254,7 +530,6 @@ class SQLiteDatabase:
     async def del_prefix(self, id):
         await asyncio.to_thread(self._set_field, id, "prefix", None)
 
-    # Custom Word Removals
     async def set_removals(self, id, removals: str):
         await asyncio.to_thread(self._set_field, id, "removals", removals)
 
@@ -267,7 +542,6 @@ class SQLiteDatabase:
     async def del_removals(self, id):
         await asyncio.to_thread(self._set_field, id, "removals", None)
 
-    # Batch Tasks (Auto-Resume)
     def _save_batch_task(self, user_id, link_prefix, from_id, to_id, last_id, chat_id, task_type):
         with self._lock:
             conn = self._get_connection()
@@ -341,155 +615,13 @@ class SQLiteDatabase:
         await asyncio.to_thread(self._clear_all_user_settings, user_id)
 
 
-if DB_URI and (DB_URI.startswith("mongodb://") or DB_URI.startswith("mongodb+srv://")):
-    try:
-        import motor.motor_asyncio
-        class MongoDatabase:
-            def __init__(self, uri, database_name):
-                self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
-                self.db = self._client[database_name]
-                self.col = self.db.users
-
-            def new_user(self, id, name):
-                return dict(
-                    id=id,
-                    name=name,
-                    session=None,
-                    api_id=None,
-                    api_hash=None,
-                    thumb=None,
-                    caption=None,
-                    upload_as_doc=0,
-                    silent_mode=0,
-                    to_saved=0,
-                    prefix=None,
-                    removals=None
-                )
-            
-            async def add_user(self, id, name):
-                user = self.new_user(id, name)
-                await self.col.insert_one(user)
-            
-            async def is_user_exist(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return bool(user)
-            
-            async def total_users_count(self):
-                count = await self.col.count_documents({})
-                return count
-
-            async def get_all_users(self):
-                return self.col.find({})
-
-            async def delete_user(self, user_id):
-                await self.col.delete_many({'id': int(user_id)})
-
-            async def set_session(self, id, session):
-                await self.col.update_one({'id': int(id)}, {'$set': {'session': session}})
-
-            async def get_session(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('session') if user else None
-
-            async def set_api_id(self, id, api_id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'api_id': api_id}})
-
-            async def get_api_id(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('api_id') if user else None
-
-            async def set_api_hash(self, id, api_hash):
-                await self.col.update_one({'id': int(id)}, {'$set': {'api_hash': api_hash}})
-
-            async def get_api_hash(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('api_hash') if user else None
-
-            async def set_thumb(self, id, thumb_path):
-                await self.col.update_one({'id': int(id)}, {'$set': {'thumb': thumb_path}})
-
-            async def get_thumb(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('thumb') if user else None
-
-            async def del_thumb(self, id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'thumb': None}})
-
-            async def set_caption(self, id, caption):
-                await self.col.update_one({'id': int(id)}, {'$set': {'caption': caption}})
-
-            async def get_caption(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('caption') if user else None
-
-            async def del_caption(self, id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'caption': None}})
-
-            async def set_upload_mode(self, id, as_doc: bool):
-                await self.col.update_one({'id': int(id)}, {'$set': {'upload_as_doc': 1 if as_doc else 0}})
-
-            async def get_upload_mode(self, id) -> bool:
-                user = await self.col.find_one({'id': int(id)})
-                return bool(user.get('upload_as_doc', 0)) if user else False
-
-            async def set_silent(self, id, silent: bool):
-                await self.col.update_one({'id': int(id)}, {'$set': {'silent_mode': 1 if silent else 0}})
-
-            async def get_silent(self, id) -> bool:
-                user = await self.col.find_one({'id': int(id)})
-                return bool(user.get('silent_mode', 0)) if user else False
-
-            async def set_to_saved(self, id, to_saved: bool):
-                await self.col.update_one({'id': int(id)}, {'$set': {'to_saved': 1 if to_saved else 0}})
-
-            async def get_to_saved(self, id) -> bool:
-                user = await self.col.find_one({'id': int(id)})
-                return bool(user.get('to_saved', 0)) if user else False
-
-            async def set_prefix(self, id, prefix: str):
-                await self.col.update_one({'id': int(id)}, {'$set': {'prefix': prefix}})
-
-            async def get_prefix(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('prefix') if user else None
-
-            async def del_prefix(self, id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'prefix': None}})
-
-            async def set_removals(self, id, removals: str):
-                await self.col.update_one({'id': int(id)}, {'$set': {'removals': removals}})
-
-            async def get_removals(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                raw = user.get('removals') if user else None
-                return [w.strip() for w in raw.split(",") if w.strip()] if raw else []
-
-            async def del_removals(self, id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'removals': None}})
-
-            async def save_batch_task(self, user_id, link_prefix, from_id, to_id, last_id, chat_id, task_type):
-                pass
-
-            async def get_batch_task(self, user_id):
-                return None
-
-            async def clear_batch_task(self, user_id):
-                pass
-
-            async def clear_all_user_settings(self, user_id):
-                await self.col.update_one({'id': int(user_id)}, {'$set': {
-                    'thumb': None,
-                    'caption': None,
-                    'upload_as_doc': 0,
-                    'silent_mode': 0,
-                    'to_saved': 0,
-                    'prefix': None,
-                    'removals': None
-                }})
-
-        db = MongoDatabase(DB_URI, DB_NAME or "TechVJDemoBot")
-    except Exception as e:
-        print(f"Warning: Could not connect to MongoDB ({e}). Using local SQLite database on this device.")
-        db = SQLiteDatabase()
+# Primary Database Initialization
+if MONGODB_URI and (MONGODB_URI.startswith("mongodb://") or MONGODB_URI.startswith("mongodb+srv://")):
+    logger.info(f"Connecting to MongoDB Atlas at {mask_mongodb_uri(MONGODB_URI)} (DB: {DB_NAME})")
+    db = MongoDatabase(MONGODB_URI, DB_NAME or "sih26044")
 else:
+    logger.warning(
+        "[LOCAL DEVELOPMENT ONLY] MONGODB_URI not provided. Falling back to local SQLite database (database/bot.db).\n"
+        "For production, please set MONGODB_URI=mongodb+srv://... in your environment."
+    )
     db = SQLiteDatabase()

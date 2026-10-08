@@ -1,8 +1,12 @@
 pyrofork>=2.3.45
 tgcrypto
 python-dotenv
-motor
-Flask
+motor>=3.3.0
+pymongo>=4.6.0
+dnspython>=2.4.0
+yt-dlp>=2024.0.0
+Flask>=2.3.0
+gunicorn>=21.2.0
 Jinja2
 werkzeug
 itsdangerous
