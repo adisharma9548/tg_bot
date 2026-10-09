@@ -15,7 +15,7 @@ from pyrogram.errors import (
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from config import API_ID, API_HASH, ERROR_MESSAGE, LOGIN_SYSTEM, STRING_SESSION, CHANNEL_ID, WAITING_TIME
 from database.db import db
-from TechVJ.strings import (
+from plugins.strings import (
     HELP_MAIN_TXT, 
     HELP_DOWNLOAD_TXT, 
     HELP_CLEANER_TXT, 
@@ -25,11 +25,11 @@ from TechVJ.strings import (
     get_help_main_markup, 
     get_help_back_markup
 )
-from TechVJ.progress import progress_for_pyrogram, humanbytes
-from TechVJ.cleaner import rename_file_clean, clean_filename
-from TechVJ.organizer import parse_tg_link, parse_course_metadata, format_organized_filename, format_organized_caption, AuditTracker
-from TechVJ.pipeline import run_pipelined_transfer, get_message_type
-from TechVJ.ytdl import is_web_url, download_web_media
+from plugins.progress import progress_for_pyrogram, humanbytes
+from plugins.cleaner import rename_file_clean, clean_filename
+from plugins.organizer import parse_tg_link, parse_course_metadata, format_organized_filename, format_organized_caption, AuditTracker
+from plugins.pipeline import run_pipelined_transfer, get_message_type
+from plugins.ytdl import is_web_url, download_web_media
 from bot import TechVJUser
 
 DOWNLOAD_DIR = "downloads"

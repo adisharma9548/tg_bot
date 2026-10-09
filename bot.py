@@ -7,20 +7,23 @@ from config import API_ID, API_HASH, BOT_TOKEN, STRING_SESSION, LOGIN_SYSTEM
 from database.db import db
 
 if STRING_SESSION is not None and LOGIN_SYSTEM == False:
-	TechVJUser = Client("TechVJ", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
-	TechVJUser.start()
+    UserClient = Client("user_session", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
+    UserClient.start()
 else:
-    TechVJUser = None
+    UserClient = None
+
+# Backwards compatibility alias
+TechVJUser = UserClient
 
 class Bot(Client):
 
     def __init__(self):
         super().__init__(
-            "techvj login",
+            "bot_session",
             api_id=API_ID,
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
-            plugins=dict(root="TechVJ"),
+            plugins=dict(root="plugins"),
             workers=150,
             sleep_threshold=5
         )

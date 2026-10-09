@@ -1,6 +1,6 @@
 import os
 import re
-from TechVJ.cleaner import clean_filename
+from plugins.cleaner import clean_filename
 
 ILLEGAL_FS_CHARS = r'[\/:*?\"<>|]'
 

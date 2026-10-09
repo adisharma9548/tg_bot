@@ -7,14 +7,14 @@ from pyrogram import Client, enums
 from pyrogram.types import Message
 from pyrogram.errors import FloodWait, MessageNotModified
 
-from TechVJ.progress import humanbytes, time_formatter
-from TechVJ.organizer import (
+from plugins.progress import humanbytes, time_formatter
+from plugins.organizer import (
     parse_course_metadata,
     format_organized_filename,
     format_organized_caption,
     AuditTracker
 )
-from TechVJ.cleaner import rename_file_clean
+from plugins.cleaner import rename_file_clean
 from database.db import db
 from config import (
     WAITING_TIME,
