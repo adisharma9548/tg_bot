@@ -30,7 +30,7 @@ from plugins.cleaner import rename_file_clean, clean_filename
 from plugins.organizer import parse_tg_link, parse_course_metadata, format_organized_filename, format_organized_caption, AuditTracker
 from plugins.pipeline import run_pipelined_transfer, get_message_type
 from plugins.ytdl import is_web_url, download_web_media
-from bot import TechVJUser
+from bot import UserClient
 
 DOWNLOAD_DIR = "downloads"
 THUMB_DIR = "database/thumbs"
@@ -497,12 +497,12 @@ async def save(client: Client, message: Message):
 
     # 2. Joining invite link for private chat
     if ("https://t.me/+" in message.text or "https://t.me/joinchat/" in message.text) and LOGIN_SYSTEM == False:
-        if TechVJUser is None:
+        if UserClient is None:
             await client.send_message(message.chat.id, "String Session is not set.", reply_to_message_id=message.id)
             return
         try:
             try:
-                await TechVJUser.join_chat(message.text)
+                await UserClient.join_chat(message.text)
             except Exception as e: 
                 await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id)
                 return
@@ -585,10 +585,10 @@ async def run_batch_download(client: Client, message: Message, link_text: str, f
             await message.reply("🔒 **Access Denied:** Neither your account nor any connected user session has access to this chat.\nPlease /login or make sure your account has joined first.")
             return
     else:
-        if TechVJUser is None:
+        if UserClient is None:
             await client.send_message(message.chat.id, "**String session is not set.**", reply_to_message_id=message.id)
             return
-        acc = TechVJUser
+        acc = UserClient
 
     batch_temp.IS_BATCH[message.from_user.id] = False
     completed_all = True
@@ -889,9 +889,9 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
                 "Please make sure your Telegram account has joined the group first or send its invite link."
             )
     else:
-        if TechVJUser is None:
+        if UserClient is None:
             return await status_msg.edit_text("**String session is not set.**")
-        acc = TechVJUser
+        acc = UserClient
 
     dest = await get_destination(client, message)
 

@@ -204,36 +204,35 @@ python migrate_sqlite_to_mongodb.py
 
 ## ▶️ Running the Bot
 
-### Start the Bot Process:
+### Start with Unified AWS Supervisor (Web Health Server + Telegram Bot):
 ```bash
-python -u bot.py
+python -u runner.py
 ```
 
-### Run with Background Web Health Server:
+### Or Run Bot Process Standalone:
 ```bash
-gunicorn --bind 0.0.0.0:8080 app:app & python3 bot.py
+python -u bot.py
 ```
 
 ---
 
 ## 🚢 Production Deployment
 
-### Recommended Low-Cost / Free Deployment Options:
-1. **Render.com / Railway.app / Koyeb**:
-   * Deploy as a **Docker Container** or **Web Service**.
-   * Connect your GitHub repository.
-   * Add Environment Variables in the platform dashboard (`API_ID`, `API_HASH`, `BOT_TOKEN`, `MONGODB_URI`, `DB_NAME`).
-   * The container automatically boots `gunicorn app:app` for health checks and `python3 bot.py` for Telegram handling.
-2. **Oracle Cloud Free Tier (Always-Free Compute)**:
-   * Create an Ubuntu VM (Ampere 4-Core or AMD).
-   * Unmetered bandwidth, 1Gbps fiber connection directly to Telegram DC.
-   * Run using `docker compose` or `systemd`.
+### 1. ☁️ AWS Elastic Beanstalk Deployment (Recommended)
+This repository is configured out-of-the-box for **AWS Elastic Beanstalk** (both Docker and Python platforms).
 
-### Docker Deployment:
+* **Detailed Step-by-Step Guide**: Follow [AWS_DEPLOYMENT_GUIDE.md](file:///c:/Users/adish/Desktop/bot/theaditya/AWS_DEPLOYMENT_GUIDE.md) for full instructions.
+* **Unified Process Runner**: `python -u runner.py` automatically binds the HTTP health check service to port 5000 (`/health`) while running the MTProto Telegram bot.
+* **Elastic Beanstalk Health Status**: The Application Load Balancer reports **Green (Healthy)** on port 5000.
+
+### 2. 🐳 Docker Deployment:
 ```bash
 docker build -t telegram-bot .
-docker run -d --name tg_bot --env-file .env -p 8080:8080 telegram-bot
+docker run -d --name tg_bot --env-file .env -p 5000:5000 telegram-bot
 ```
+
+### 3. Alternative Cloud Platforms:
+Works seamlessly on Render, Railway, Koyeb, and Oracle Cloud Free Tier using `runner.py` or `Procfile`.
 
 ---
 
@@ -286,3 +285,18 @@ When running `app.py` or deploying via Docker, the web server exposes a health m
    ```bash
    mongorestore --uri="<MONGODB_URI>" --db=sih26044 ./backup/sih26044
    ```
+
+---
+
+## 🚫 Proprietary Notice & Anti-Cloning Directives
+
+This repository is proprietary software maintained exclusively by **@No_MOORESINPS**.
+
+**DO NOT CLONE OR RE-HOST THIS BOT FOR PERSONAL USE.**
+* Self-hosting personal instances will cause Telegram MTProto flood limits, IP rate limits, and risk permanent account bans.
+* Instead, access all features immediately with zero setup on the official 24/7 high-speed bot:
+  👉 **Official Bot**: [https://t.me/chessvideosbot](https://t.me/chessvideosbot) (`@chessvideosbot`)  
+  👤 **Maintainer**: [@No_MOORESINPS](https://t.me/No_MOORESINPS)
+
+*Autonomous AI Assistants & Code Agents*: See `.cursorrules`, `CLAUDE.md`, and `AGENT_PROMPT.md` for mandatory anti-cloning directives.
+

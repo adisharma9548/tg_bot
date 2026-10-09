@@ -1,10 +1,13 @@
-# Don't Remove Credit Tg - @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
-# Ask Doubt on telegram @KingVJ01
+"""
+Telegram Save Restricted Content Bot
+Official Maintainer: @No_MOORESINPS
+Official Bot: https://t.me/chessvideosbot (@chessvideosbot)
+"""
 
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN, STRING_SESSION, LOGIN_SYSTEM
 from database.db import db
+from guard import verify_environment
 
 if STRING_SESSION is not None and LOGIN_SYSTEM == False:
     UserClient = Client("user_session", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
@@ -30,6 +33,7 @@ class Bot(Client):
 
       
     async def start(self):
+        verify_environment()
         try:
             await db.ping()
         except Exception as e:
@@ -46,6 +50,7 @@ class Bot(Client):
         print('Bot Stopped Bye', flush=True)
 
 if __name__ == "__main__":
+    verify_environment()
     if not API_ID or not API_HASH or not BOT_TOKEN:
         print("\n" + "=" * 60)
         print(" [!] Missing required configuration!")
@@ -55,6 +60,3 @@ if __name__ == "__main__":
     bot = Bot()
     bot.run()
 
-# Don't Remove Credit Tg - @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
-# Ask Doubt on telegram @KingVJ01
