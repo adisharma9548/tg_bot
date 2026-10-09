@@ -17,3 +17,5 @@ database/thumbs/
 status.txt
 *status.txt
 .DS_Store
+*.zip
+
