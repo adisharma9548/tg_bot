@@ -36,7 +36,7 @@ Or send a topic range:
 • Automatically standardizes sequence: `[300] Subject - Lecture - Part 1.mp4`
 • Generates a full Verification & Audit Checklist!
 
-💡 *Tip: If a batch is interrupted by internet drop or restart, send `/resume` to continue from the exact last file!*
+💡 *Tip: Only 1 active task is allowed at a time. If you send another link while a task is running, the bot will ask you to wait or /cancel the ongoing task.*
 """
 
 HELP_CLEANER_TXT = """🏷️ **Filename Cleaner & Renamer**
@@ -97,10 +97,9 @@ HELP_COMMANDS_TXT = """📌 **Quick Command Cheat Sheet**
 `/status` — View storage & settings dashboard
 `/login` — Connect your Telegram user account
 `/logout` — Disconnect your session
-`/cancel` — Cancel active download task
+`/cancel` — Cancel active task and purge temporary files
 `/clear` — Clear chat history from both sides in one click
 `/reset` — Reset all custom settings & preferences to default
-`/resume` — Resume interrupted batch
 `/topic` — Crawl & transfer entire forum topic with audit report
 `/mode` — Toggle Video vs. Document
 `/silent` — Toggle silent notifications

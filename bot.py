@@ -15,8 +15,8 @@ if STRING_SESSION is not None and LOGIN_SYSTEM == False:
 else:
     UserClient = None
 
-# Backwards compatibility alias
-TechVJUser = UserClient
+# Global user client for single-session configuration
+# (Multi-account sessions are managed dynamically via database/db.py)
 
 class Bot(Client):
 

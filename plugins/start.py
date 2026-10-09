@@ -37,8 +37,105 @@ THUMB_DIR = "database/thumbs"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
 
-class batch_temp(object):
-    IS_BATCH = {}
+class TaskManager:
+    """
+    Industry-standard concurrent task execution & security manager.
+    Enforces strict single-task execution per user and provides immediate file purge on cancellation.
+    """
+    _active_tasks = {}
+
+    @classmethod
+    def is_user_busy(cls, user_id: int) -> bool:
+        task = cls._active_tasks.get(user_id)
+        return bool(task and not task.get("cancelled", False))
+
+    @classmethod
+    def get_start_time(cls, user_id: int) -> float:
+        task = cls._active_tasks.get(user_id, {})
+        return task.get("start_time", time.time())
+
+    @classmethod
+    def start_task(cls, user_id: int, task_type: str = "transfer"):
+        cls._active_tasks[user_id] = {
+            "type": task_type,
+            "start_time": time.time(),
+            "cancelled": False,
+            "files": set()
+        }
+
+    @classmethod
+    def register_file(cls, user_id: int, file_path: str):
+        if user_id in cls._active_tasks and file_path:
+            cls._active_tasks[user_id]["files"].add(file_path)
+
+    @classmethod
+    def is_cancelled(cls, user_id: int) -> bool:
+        task = cls._active_tasks.get(user_id)
+        if not task:
+            return False
+        return bool(task.get("cancelled", False))
+
+    @classmethod
+    def cancel_task(cls, user_id: int):
+        task = cls._active_tasks.get(user_id)
+        if task:
+            task["cancelled"] = True
+        cls.purge_user_files(user_id)
+
+    @classmethod
+    def purge_user_files(cls, user_id: int):
+        """Immediately deletes any files associated with the user from backend downloads/ directory."""
+        task = cls._active_tasks.get(user_id)
+        if task:
+            for f in list(task.get("files", [])):
+                try:
+                    if os.path.isfile(f):
+                        os.remove(f)
+                    elif os.path.isdir(f):
+                        shutil.rmtree(f, ignore_errors=True)
+                except Exception:
+                    pass
+            task["files"].clear()
+
+        # Also search downloads directory for any matching user ID files
+        try:
+            if os.path.exists(DOWNLOAD_DIR):
+                for fname in os.listdir(DOWNLOAD_DIR):
+                    if str(user_id) in fname:
+                        fpath = os.path.join(DOWNLOAD_DIR, fname)
+                        try:
+                            if os.path.isfile(fpath):
+                                os.remove(fpath)
+                            elif os.path.isdir(fpath):
+                                shutil.rmtree(fpath, ignore_errors=True)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    @classmethod
+    def finish_task(cls, user_id: int):
+        cls.purge_user_files(user_id)
+        cls._active_tasks.pop(user_id, None)
+
+    # Compatibility shim for legacy dictionary lookups
+    class _CompatDict:
+        def get(self, user_id, default=None):
+            if user_id in TaskManager._active_tasks:
+                return TaskManager.is_cancelled(user_id)
+            return default
+        def __getitem__(self, user_id):
+            return TaskManager.is_cancelled(user_id)
+        def __setitem__(self, user_id, val):
+            if val:
+                TaskManager.cancel_task(user_id)
+            else:
+                TaskManager.start_task(user_id)
+
+    IS_BATCH = _CompatDict()
+
+# Backwards compatibility alias
+batch_temp = TaskManager
 
 
 async def get_destination(client: Client, message: Message):
@@ -120,13 +217,23 @@ async def help_callback(client: Client, query: CallbackQuery):
             pass
 
 
-# Cancel command
+# Cancel command: stops active task and purges backend temporary files immediately
 @Client.on_message(filters.command(["cancel"]) & filters.private)
-async def send_cancel(client: Client, message: Message):
-    batch_temp.IS_BATCH[message.from_user.id] = True
+async def handle_cancel_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not TaskManager.is_user_busy(user_id):
+        return await message.reply("ℹ️ **You do not have any active task running.**")
+
+    TaskManager.cancel_task(user_id)
+    TaskManager.purge_user_files(user_id)
+    try:
+        await db.clear_batch_task(user_id)
+    except Exception:
+        pass
+
     await client.send_message(
         chat_id=message.chat.id, 
-        text="🛑 **Batch process cancelled.** You can resume anytime using /resume."
+        text="🛑 **Task cancelled.**\nAll downloaded files and cache have been purged from the backend server to prevent storage clutter."
     )
 
 
@@ -137,8 +244,9 @@ async def clear_chat_history(client: Client, message: Message):
     chat_id = message.chat.id
     current_msg_id = message.id
 
-    # 1. Stop any ongoing batch task for this user
-    batch_temp.IS_BATCH[user_id] = True
+    # 1. Stop any ongoing task for this user and purge files
+    TaskManager.cancel_task(user_id)
+    TaskManager.purge_user_files(user_id)
 
     # 2. If user is logged in, use their user account session to wipe chat history for both sides
     if LOGIN_SYSTEM == True:
@@ -215,7 +323,8 @@ async def dismiss_clear_msg(client: Client, query: CallbackQuery):
 @Client.on_message(filters.command(["reset", "reset_settings"]) & filters.private)
 async def reset_settings(client: Client, message: Message):
     user_id = message.from_user.id
-    batch_temp.IS_BATCH[user_id] = True
+    TaskManager.cancel_task(user_id)
+    TaskManager.purge_user_files(user_id)
     thumb_path = f"{THUMB_DIR}/{user_id}.jpg"
     if os.path.exists(thumb_path):
         try:
@@ -431,24 +540,18 @@ async def del_caption(client: Client, message: Message):
     await message.reply("🗑️ **Custom caption deleted.** Original captions will be used.")
 
 
-# Resume Command
+# Resume Command (Disabled for DDoS protection and storage hygiene)
 @Client.on_message(filters.command(["resume"]) & filters.private)
-async def resume_batch(client: Client, message: Message):
-    task = await db.get_batch_task(message.from_user.id)
-    if not task:
-        return await message.reply("❌ **No interrupted batch download found to resume.**")
-
-    last_id = task.get('last_id', 0)
-    to_id = task.get('to_id', 0)
-    link_prefix = task.get('link_prefix', '')
-
-    if last_id >= to_id:
+async def handle_resume_command(client: Client, message: Message):
+    try:
         await db.clear_batch_task(message.from_user.id)
-        return await message.reply("✅ **Your previous batch was already completed!**")
-
-    next_id = last_id + 1
-    await message.reply(f"🔄 **Resuming batch from post {next_id} to {to_id}...**")
-    await run_batch_download(client, message, link_prefix, next_id, to_id, resume_orig_from=task.get('from_id', next_id))
+    except Exception:
+        pass
+    await message.reply(
+        "❌ **Batch resume is disabled.**\n\n"
+        "To protect backend cloud storage from cluttered files and DDoS attack vectors, cancelled tasks are immediately purged.\n"
+        "Please send a fresh link to start a new download."
+    )
 
 
 # Topic Command Handler
@@ -463,6 +566,15 @@ async def crawl_topic_command(client: Client, message: Message):
             "• Automatically scans all files inside that topic\n"
             "• Preserves sequence by lecture number & parts\n"
             "• Generates a full Verification & Audit Checklist!"
+        )
+
+    # Strict single-task concurrency check per user
+    if TaskManager.is_user_busy(message.from_user.id):
+        wait_time = max(WAITING_TIME, 10)
+        return await message.reply_text(
+            f"⏳ **Another task is currently in progress!**\n\n"
+            f"Please send `/cancel` to abort your current task or wait until it finishes (~{wait_time}s).\n\n"
+            f"💡 *Only one active task is allowed at a time to prevent server congestion and DDoS risks.*"
         )
 
     link = message.command[1].strip()
@@ -485,10 +597,18 @@ async def crawl_topic_command(client: Client, message: Message):
 
 # Main Save / Link Handler (Processes raw links, non-commands)
 @Client.on_message(filters.text & ~filters.regex(r"^/") & filters.private, group=10)
-async def save(client: Client, message: Message):
+async def handle_message_transfer(client: Client, message: Message):
     if message.text.startswith("/"):
         raise pyrogram.ContinuePropagation
 
+    # Strict single-task concurrency check per user
+    if TaskManager.is_user_busy(message.from_user.id):
+        wait_time = max(WAITING_TIME, 10)
+        return await message.reply_text(
+            f"⏳ **Another task is currently in progress!**\n\n"
+            f"Please send `/cancel` to abort your ongoing task or wait until it finishes (~{wait_time}s).\n\n"
+            f"💡 *Only one active task is allowed at a time to prevent server congestion and DDoS risks.*"
+        )
 
     # 1. External Web URLs (yt-dlp)
     if is_web_url(message.text):
@@ -515,9 +635,6 @@ async def save(client: Client, message: Message):
 
     # 3. Telegram Post Links (Channels, Groups, Forum Topics)
     if "https://t.me/" in message.text:
-        if batch_temp.IS_BATCH.get(message.from_user.id) == False:
-            return await message.reply_text("⏳ **Another task is currently processing.**\nPlease wait for it to finish or send /cancel to stop it.")
-
         link_info = parse_tg_link(message.text)
         if not link_info:
             return await message.reply_text("❌ **Invalid link format.** Check /help for link syntax.")
@@ -590,15 +707,16 @@ async def run_batch_download(client: Client, message: Message, link_text: str, f
             return
         acc = UserClient
 
-    batch_temp.IS_BATCH[message.from_user.id] = False
+    TaskManager.start_task(message.from_user.id, "batch_download")
     completed_all = True
     target_title = f"Topic #{link_info['topic_id']}" if link_info and link_info.get("topic_id") else f"Posts {fromID}-{toID}"
     tracker = AuditTracker(topic_title=target_title)
 
     try:
         for msgid in range(fromID, toID + 1):
-            if batch_temp.IS_BATCH.get(message.from_user.id):
+            if TaskManager.is_cancelled(message.from_user.id):
                 completed_all = False
+                TaskManager.purge_user_files(message.from_user.id)
                 break
             
             try:
@@ -639,17 +757,6 @@ async def run_batch_download(client: Client, message: Message, link_text: str, f
                     if ok:
                         tracker.record_item(msgid, serial, title, part, res_filename, "success")
 
-                # Save progress after each successful item for /resume
-                await db.save_batch_task(
-                    user_id=message.from_user.id,
-                    link_prefix=link_text,
-                    from_id=orig_from,
-                    to_id=toID,
-                    last_id=msgid,
-                    chat_id=str(link_info.get("chat_id") or link_info.get("username") or "chat") if link_info else "chat",
-                    task_type="batch"
-                )
-
             except FloodWait as e:
                 await client.send_message(
                     message.chat.id, 
@@ -664,16 +771,19 @@ async def run_batch_download(client: Client, message: Message, link_text: str, f
             await asyncio.sleep(WAITING_TIME)
 
         if completed_all and fromID <= toID:
-            await db.clear_batch_task(message.from_user.id)
             await client.send_message(message.chat.id, tracker.generate_report())
 
     finally:
-        if LOGIN_SYSTEM == True:
+        if LOGIN_SYSTEM == True and acc:
             try:
                 await acc.disconnect()
             except:
-                pass                				
-        batch_temp.IS_BATCH[message.from_user.id] = True
+                pass
+        TaskManager.finish_task(message.from_user.id)
+        try:
+            await db.clear_batch_task(message.from_user.id)
+        except Exception:
+            pass
 
 
 
@@ -689,7 +799,7 @@ async def handle_media(client: Client, acc, message: Message, chatid, msgid: int
     dest = await get_destination(client, message)
     silent = await db.get_silent(message.from_user.id)
 
-    if batch_temp.IS_BATCH.get(message.from_user.id):
+    if TaskManager.is_cancelled(message.from_user.id):
         return (False, None, None, None, None)
 
     # Plain text messages
@@ -727,8 +837,15 @@ async def handle_media(client: Client, acc, message: Message, chatid, msgid: int
             progress=progress_for_pyrogram, 
             progress_args=("📥 Downloading", smsg, start_time)
         )
-        
-        if batch_temp.IS_BATCH.get(message.from_user.id):
+        if file:
+            TaskManager.register_file(message.from_user.id, file)
+
+        if TaskManager.is_cancelled(message.from_user.id):
+            if file and os.path.exists(file):
+                try:
+                    os.remove(file)
+                except Exception:
+                    pass
             return (False, None, None, None, None)
 
         prefix = await db.get_prefix(message.from_user.id)
@@ -879,17 +996,20 @@ async def handle_media(client: Client, acc, message: Message, chatid, msgid: int
 
 # Topic Crawler Engine (Scans & transfers all media and text in a topic thread)
 async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_id: int):
+    TaskManager.start_task(message.from_user.id, "topic_crawl")
     status_msg = await message.reply(f"🔍 **Connecting & Scanning Topic #{topic_id}...**")
     acc = None
     if LOGIN_SYSTEM == True:
         acc = await get_user_client(message.from_user.id, target_chat_id=chat_id)
         if acc is None:
+            TaskManager.finish_task(message.from_user.id)
             return await status_msg.edit_text(
                 "🔒 **Access Denied:** Neither your account nor any connected session has joined this private group.\n"
                 "Please make sure your Telegram account has joined the group first or send its invite link."
             )
     else:
         if UserClient is None:
+            TaskManager.finish_task(message.from_user.id)
             return await status_msg.edit_text("**String session is not set.**")
         acc = UserClient
 
@@ -909,14 +1029,14 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
         # 2. In Telegram Forum Supergroups, topic messages are replies to the topic thread root message (topic_id)
         try:
             async for msg in acc.get_discussion_replies(chat_id, topic_id):
-                if batch_temp.IS_BATCH.get(message.from_user.id):
+                if TaskManager.is_cancelled(message.from_user.id):
                     break
                 if get_message_type(msg):
                     all_messages.append(msg)
         except Exception:
             # Fallback: scan recent history and match thread ID
             async for msg in acc.get_chat_history(chat_id, limit=500):
-                if batch_temp.IS_BATCH.get(message.from_user.id):
+                if TaskManager.is_cancelled(message.from_user.id):
                     break
                 if getattr(msg, "message_thread_id", None) == topic_id or getattr(msg, "topic_id", None) == topic_id:
                     if get_message_type(msg):
@@ -946,7 +1066,7 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
             messages_list=unique_messages,
             title=f"Topic #{topic_id}",
             status_msg=status_msg,
-            batch_temp_dict=batch_temp.IS_BATCH
+            task_manager=TaskManager.IS_BATCH
         )
 
     except Exception as e:
@@ -957,7 +1077,7 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
                 await acc.disconnect()
             except:
                 pass
-        batch_temp.IS_BATCH[message.from_user.id] = True
+        TaskManager.finish_task(message.from_user.id)
 
 
 
@@ -965,6 +1085,7 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
 
 # Handle External Web URLs (YouTube, Instagram, X/Twitter, direct links)
 async def handle_web_url(client: Client, message: Message):
+    TaskManager.start_task(message.from_user.id, "web_download")
     smsg = await client.send_message(message.chat.id, "🌐 **Downloading media with yt-dlp...**", reply_to_message_id=message.id)
     file = None
     ph_path = None
@@ -974,10 +1095,18 @@ async def handle_web_url(client: Client, message: Message):
 
     try:
         file, title, duration = await download_web_media(message.text.strip(), DOWNLOAD_DIR)
+        if file:
+            TaskManager.register_file(message.from_user.id, file)
+
+        if TaskManager.is_cancelled(message.from_user.id):
+            return
         
         prefix = await db.get_prefix(message.from_user.id)
         removals = await db.get_removals(message.from_user.id)
         file = rename_file_clean(file, prefix=prefix, custom_removals=removals)
+        if file:
+            TaskManager.register_file(message.from_user.id, file)
+
         filename = os.path.basename(file)
         filesize = humanbytes(os.path.getsize(file))
 
@@ -1023,6 +1152,7 @@ async def handle_web_url(client: Client, message: Message):
     except Exception as e:
         await client.send_message(message.chat.id, f"❌ **Web download error:** `{e}`")
     finally:
+        TaskManager.finish_task(message.from_user.id)
         if file and os.path.exists(file):
             try:
                 os.remove(file)

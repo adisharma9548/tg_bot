@@ -27,7 +27,7 @@ async def broadcast_messages(user_id, message):
 
 
 @Client.on_message(filters.command("broadcast") & filters.private)
-async def broadcast(bot, message):
+async def handle_broadcast_command(bot, message):
     if not ADMINS:
         return await message.reply_text("❌ **Broadcasting is disabled because no ADMIN is set.**")
 

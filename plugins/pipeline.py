@@ -7,7 +7,7 @@ from pyrogram import Client, enums
 from pyrogram.types import Message
 from pyrogram.errors import FloodWait, MessageNotModified
 
-from plugins.progress import humanbytes, time_formatter
+from plugins.progress import humanbytes, time_formatter, format_progress_bar
 from plugins.organizer import (
     parse_course_metadata,
     format_organized_filename,
@@ -71,15 +71,14 @@ class DashboardManager:
             self.last_edit_time = now
 
             pct = min(100.0, (self.sent_count / self.total_items) * 100.0)
-            filled = int(pct / 100.0 * 12)
-            bar = "■" * filled + "□" * (12 - filled)
+            bar = format_progress_bar(pct, 10)
             remaining = max(0, self.total_items - self.sent_count)
 
             # Upload indicator
             if self.current_upload_title:
                 up_str = f"`{self.current_upload_title}`"
                 if self.current_upload_stats:
-                    up_str += f"\n   ↳ ⚡ {self.current_upload_stats}"
+                    up_str += f"\n>    ↳ ⚡ {self.current_upload_stats}"
             else:
                 up_str = "_Idle / Preparing..._"
 
@@ -87,23 +86,22 @@ class DashboardManager:
             q_cnt = len(self.prefetched_queue_items)
             if q_cnt > 0:
                 first_name = self.prefetched_queue_items[0]
-                q_str = f"**{q_cnt}** (`{first_name}` [Ready on Disk])"
+                q_str = f"**{q_cnt}** (`{first_name}`)"
             else:
                 if self.current_download_title:
-                    q_str = f"**0** (📥 Pre-fetching `{self.current_download_title}`...)"
+                    q_str = f"**0** (📥 `{self.current_download_title}`)"
                 else:
                     q_str = "**0**"
 
             text = (
                 f"📚 **{self.title} Transfer**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 **Total Discovered:** `{self.total_items}` items\n"
-                f"✅ **Delivered to Chat:** `{self.sent_count} / {self.total_items}`\n"
-                f"📤 **Currently Uploading:**\n   {up_str}\n"
-                f"📦 **Pre-fetched in Queue:** {q_str}\n"
-                f"⏳ **Remaining:** `{remaining}` items\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"Progress: [{bar}] `{pct:.1f}%`"
+                f"> ✦ {bar} ✦\n"
+                f"> \n"
+                f"> » 📊 **Total Items** • {self.total_items}\n"
+                f"> » 🔋 **Delivered** • {self.sent_count} / {self.total_items} ({pct:.1f}%)\n"
+                f"> » 📤 **Uploading** • {up_str}\n"
+                f"> » 📦 **Prefetched** • {q_str}\n"
+                f"> » ⏳ **Remaining** • {remaining} items"
             )
 
             try:
@@ -149,7 +147,7 @@ async def run_pipelined_transfer(
     messages_list: list,
     title: str,
     status_msg: Message,
-    batch_temp_dict: dict
+    task_manager: dict = None
 ):
     """
     High-Performance Pipelined Lookahead Transfer Engine.
@@ -161,7 +159,8 @@ async def run_pipelined_transfer(
     - Automatic per-item disk cleanup so local storage is never exhausted.
     """
     user_id = user_message.from_user.id
-    batch_temp_dict[user_id] = False
+    if task_manager is not None:
+        task_manager[user_id] = False
 
     # Fetch user configuration preferences
     prefix = await db.get_prefix(user_id)
@@ -181,7 +180,7 @@ async def run_pipelined_transfer(
     async def producer():
         """Producer coroutine: Pre-fetches media in background while consumer uploads."""
         for msg in messages_list:
-            if batch_temp_dict.get(user_id):
+            if task_manager and task_manager.get(user_id):
                 break
 
             m_type = get_message_type(msg)
@@ -202,7 +201,7 @@ async def run_pipelined_transfer(
 
             # 2. Media messages: acquire prefetch semaphore slot
             await prefetch_sem.acquire()
-            if batch_temp_dict.get(user_id):
+            if task_manager and task_manager.get(user_id):
                 break
 
             msg_temp_dir = os.path.join(DOWNLOAD_DIR, f"task_{msg.id}_{int(time.time()*1000)%100000}")
@@ -295,7 +294,7 @@ async def run_pipelined_transfer(
             if item is None:
                 break
 
-            if batch_temp_dict.get(user_id):
+            if task_manager and task_manager.get(user_id):
                 if item.get("temp_dir"):
                     shutil.rmtree(item["temp_dir"], ignore_errors=True)
                 break
@@ -501,7 +500,8 @@ async def run_pipelined_transfer(
             except Exception:
                 break
 
-        batch_temp_dict[user_id] = True
+        if task_manager is not None:
+            task_manager[user_id] = True
         try:
             await status_msg.delete()
         except Exception:

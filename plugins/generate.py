@@ -19,7 +19,7 @@ from database.db import db
 SESSION_STRING_SIZE = 351
 
 @Client.on_message(filters.private & ~filters.forwarded & filters.command(["logout"]))
-async def logout(client, message):
+async def handle_logout_command(client, message):
     user_data = await db.get_session(message.from_user.id)  
     if user_data is None:
         await message.reply("**You are not logged in.**")
@@ -28,7 +28,7 @@ async def logout(client, message):
     await message.reply("**Logged out successfully!**")
 
 @Client.on_message(filters.private & ~filters.forwarded & filters.command(["login"]))
-async def main(bot: Client, message: Message):
+async def handle_login_command(bot: Client, message: Message):
     user_data = await db.get_session(message.from_user.id)
     if user_data is not None:
         await message.reply("**You are already logged in. First use /logout, then login again.**")
