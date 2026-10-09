@@ -1,21 +1,10 @@
 import os
-import re
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
-
-# MongoDB Database Configuration
-# Supports both MONGODB_URI and DB_URI
-MONGODB_URI = os.environ.get("MONGODB_URI") or os.environ.get("DB_URI", "").strip()
-DB_NAME = os.environ.get("DB_NAME", "sih26044").strip()
-DB_URI = MONGODB_URI  # Backward compatibility alias
-
-# Collection Names (avoids collision if database is shared with web apps)
-USERS_COLLECTION = os.environ.get("USERS_COLLECTION", "tg_users").strip()
-BATCH_TASKS_COLLECTION = os.environ.get("BATCH_TASKS_COLLECTION", "tg_batch_tasks").strip()
 
 # Login feature: True enables /login inside bot; False requires STRING_SESSION
 login_sys_str = os.environ.get('LOGIN_SYSTEM', 'True').strip().lower()
@@ -48,6 +37,13 @@ else:
 # Optional Channel ID to upload downloaded content to (leave blank to send directly to user)
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
+# Database Configuration (Supports both MongoDB Atlas and SQLite fallback)
+MONGODB_URI = (os.environ.get("MONGODB_URI") or os.environ.get("DB_URI", "")).strip()
+DB_URI = MONGODB_URI
+DB_NAME = os.environ.get("DB_NAME", "sih26044").strip()
+USERS_COLLECTION = os.environ.get("USERS_COLLECTION", "tg_users").strip()
+BATCH_TASKS_COLLECTION = os.environ.get("BATCH_TASKS_COLLECTION", "tg_batch_tasks").strip()
+
 # Delay in seconds to prevent Telegram flood wait limits
 wait_time_val = os.environ.get("WAITING_TIME", "10").strip()
 WAITING_TIME = int(wait_time_val) if wait_time_val.isdigit() else 10
@@ -61,11 +57,12 @@ def mask_mongodb_uri(uri: str) -> str:
     """Masks credentials in MongoDB URI for safe logging."""
     if not uri:
         return "<not set>"
+    import re
     return re.sub(r":([^@]+)@", r":****@", uri)
 
 
 def validate_config():
-    """Validates required environment variables for production readiness."""
+    """Validates required environment variables for bot execution."""
     missing = []
     if not API_ID:
         missing.append("API_ID")
@@ -73,8 +70,6 @@ def validate_config():
         missing.append("API_HASH")
     if not BOT_TOKEN:
         missing.append("BOT_TOKEN")
-    if not MONGODB_URI:
-        missing.append("MONGODB_URI (or DB_URI)")
     if not LOGIN_SYSTEM and not STRING_SESSION:
         missing.append("STRING_SESSION (required when LOGIN_SYSTEM=False)")
 

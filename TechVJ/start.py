@@ -547,7 +547,7 @@ async def get_user_client(user_id: int, target_chat_id: int = None):
         candidates.append((user_id, user_data, api_id, api_hash))
 
     try:
-        other_sessions = await db.get_other_sessions(exclude_user_id=user_id)
+        other_sessions = await db.get_all_other_sessions(user_id)
         for u_id, s_str, a_id, a_hash in other_sessions:
             candidates.append((u_id, s_str, int(a_id or API_ID), a_hash or API_HASH))
     except Exception:
