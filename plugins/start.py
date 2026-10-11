@@ -1553,17 +1553,203 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
                 "Make sure the topic thread contains text messages, documents, or videos."
             )
 
-        # Launch Pipelined Lookahead Transfer with Live Queue Monitor
-        await run_pipelined_transfer(
-            client=client,
-            acc=acc,
-            user_message=message,
-            dest=dest,
-            messages_list=unique_messages,
-            title=f"Topic #{topic_id}",
-            status_msg=status_msg,
-            task_manager=TaskManager.IS_BATCH
-        )
+        # Pure Sequential Transfer: Download and upload one file at a time using identical single-video cards
+        tracker = AuditTracker(topic_title=f"Topic #{topic_id}")
+        total_items = len(unique_messages)
+        prefix = await db.get_prefix(message.from_user.id)
+        removals = await db.get_removals(message.from_user.id)
+        user_caption_tmpl = await db.get_caption(message.from_user.id)
+        user_thumb = await db.get_thumb(message.from_user.id)
+        upload_as_doc = await db.get_upload_mode(message.from_user.id)
+        silent = await db.get_silent(message.from_user.id)
+
+        for idx, msg in enumerate(unique_messages, 1):
+            if TaskManager.is_cancelled(message.from_user.id):
+                TaskManager.purge_user_files(message.from_user.id)
+                break
+
+            m_type = get_message_type(msg)
+            if not m_type:
+                continue
+
+            # 1. Plain text messages
+            if m_type == "Text":
+                try:
+                    if msg.entities:
+                        try:
+                            await client.send_message(dest, msg.text, entities=msg.entities, disable_notification=silent)
+                        except Exception:
+                            await client.send_message(dest, msg.text, disable_notification=silent)
+                    else:
+                        await client.send_message(dest, msg.text, disable_notification=silent)
+                    tracker.record_item(msg.id, "", (msg.text[:30].replace("\n", " ") + "..."), "", "Text Message", "success")
+                except Exception:
+                    tracker.record_item(msg.id, "", f"post_{msg.id}", "", "Text Message", "error")
+                await asyncio.sleep(min(WAITING_TIME, 2))
+                continue
+
+            # 2. Media message (Video, Document, Audio, Photo, etc.)
+            file = None
+            ph_path = None
+            success = False
+            item_serial = None
+            item_title = None
+            item_part = None
+            final_filename = None
+
+            try:
+                # Update status message for current item
+                dl_label = f"📥 Downloading [{idx}/{total_items}]"
+                start_time = time.time()
+                file = await acc.download_media(
+                    msg,
+                    file_name=f"{DOWNLOAD_DIR}/",
+                    progress=progress_for_pyrogram,
+                    progress_args=(dl_label, status_msg, start_time)
+                )
+
+                if TaskManager.is_cancelled(message.from_user.id):
+                    TaskManager.purge_user_files(message.from_user.id)
+                    break
+
+                if not file or not os.path.exists(file):
+                    tracker.record_item(msg.id, "", "", "", f"post_{msg.id}", "skipped")
+                    continue
+
+                TaskManager.register_file(message.from_user.id, file)
+
+                orig_basename = os.path.basename(file)
+                orig_caption = msg.caption or msg.text or ""
+                item_serial, item_title, item_part = parse_course_metadata(orig_caption, orig_basename)
+                organized_name = format_organized_filename(orig_caption, orig_basename, prefix=prefix, custom_removals=removals)
+
+                if organized_name != orig_basename:
+                    file_dir = os.path.dirname(file)
+                    new_file_path = os.path.join(file_dir, organized_name)
+                    try:
+                        if os.path.exists(new_file_path) and new_file_path != file:
+                            os.remove(new_file_path)
+                        os.rename(file, new_file_path)
+                        file = new_file_path
+                    except Exception:
+                        file = rename_file_clean(file, prefix=prefix, custom_removals=removals)
+                else:
+                    file = rename_file_clean(file, prefix=prefix, custom_removals=removals)
+
+                final_filename = os.path.basename(file)
+                filesize = humanbytes(os.path.getsize(file))
+                caption = format_organized_caption(orig_caption, final_filename, filesize, custom_tmpl=user_caption_tmpl)
+
+                # Thumbnail resolution
+                if user_thumb and os.path.exists(user_thumb):
+                    ph_path = user_thumb
+                else:
+                    try:
+                        media_obj = getattr(msg, m_type.lower(), None)
+                        if media_obj and hasattr(media_obj, 'thumbs') and media_obj.thumbs:
+                            ph_path = await acc.download_media(media_obj.thumbs[0].file_id)
+                    except Exception:
+                        ph_path = None
+                    if not ph_path and os.path.exists(DEFAULT_THUMB):
+                        ph_path = DEFAULT_THUMB
+
+                up_label = f"📤 Uploading [{idx}/{total_items}]"
+                up_start_time = time.time()
+
+                if m_type == "Document" or (m_type == "Video" and upload_as_doc):
+                    await client.send_document(
+                        dest,
+                        file,
+                        thumb=ph_path,
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML,
+                        disable_notification=silent,
+                        progress=progress_for_pyrogram,
+                        progress_args=(up_label, status_msg, up_start_time)
+                    )
+                    success = True
+                elif m_type == "Video":
+                    await client.send_video(
+                        dest,
+                        file,
+                        duration=getattr(msg.video, 'duration', 0),
+                        width=getattr(msg.video, 'width', 0),
+                        height=getattr(msg.video, 'height', 0),
+                        thumb=ph_path,
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML,
+                        disable_notification=silent,
+                        progress=progress_for_pyrogram,
+                        progress_args=(up_label, status_msg, up_start_time)
+                    )
+                    success = True
+                elif m_type == "Audio":
+                    await client.send_audio(
+                        dest,
+                        file,
+                        thumb=ph_path,
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML,
+                        disable_notification=silent,
+                        progress=progress_for_pyrogram,
+                        progress_args=(up_label, status_msg, up_start_time)
+                    )
+                    success = True
+                elif m_type == "Photo":
+                    await client.send_photo(dest, file, caption=caption, parse_mode=enums.ParseMode.HTML, disable_notification=silent)
+                    success = True
+                elif m_type == "Voice":
+                    await client.send_voice(
+                        dest,
+                        file,
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML,
+                        disable_notification=silent,
+                        progress=progress_for_pyrogram,
+                        progress_args=(up_label, status_msg, up_start_time)
+                    )
+                    success = True
+                elif m_type == "Animation":
+                    await client.send_animation(dest, file, parse_mode=enums.ParseMode.HTML, disable_notification=silent)
+                    success = True
+                elif m_type == "Sticker":
+                    await client.send_sticker(dest, file, parse_mode=enums.ParseMode.HTML, disable_notification=silent)
+                    success = True
+
+            except FloodWait as e:
+                await client.send_message(message.chat.id, f"⚠️ **Telegram FloodWait:** Waiting `{e.value}` seconds...")
+                await asyncio.sleep(e.value + 1)
+            except Exception as e:
+                if ERROR_MESSAGE:
+                    await client.send_message(message.chat.id, f"❌ Error on `{final_filename or f'post_{msg.id}'}`: {e}")
+            finally:
+                # Immediate Disk Cleanup: delete downloaded file and temp thumb
+                if file and os.path.exists(file):
+                    try:
+                        os.remove(file)
+                    except Exception:
+                        pass
+                if ph_path and os.path.exists(ph_path) and not ph_path.startswith(THUMB_DIR):
+                    try:
+                        os.remove(ph_path)
+                    except Exception:
+                        pass
+
+            if success:
+                tracker.record_item(msg.id, item_serial, item_title or final_filename, item_part, final_filename, "success")
+            else:
+                tracker.record_item(msg.id, item_serial, item_title or f"post_{msg.id}", item_part, final_filename or f"post_{msg.id}", "error")
+
+            await asyncio.sleep(min(WAITING_TIME, 2))
+
+        # Transfer complete: clean up reusable progress message & deliver report
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
+        if not TaskManager.is_cancelled(message.from_user.id):
+            await client.send_message(message.chat.id, tracker.generate_report())
 
     except Exception as e:
         err_msg = str(e)
