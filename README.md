@@ -146,7 +146,7 @@ Create a `.env` file in the project root based on `.env.example`:
 
 | Variable | Required | Description | Example |
 | :--- | :---: | :--- | :--- |
-| `API_ID` | **Yes** | Telegram API ID | `10907272` |
+| `API_ID` | **Yes** | Telegram API ID | `109` |
 | `API_HASH` | **Yes** | Telegram API Hash | `cd96b7ebc0df678e076...` |
 | `BOT_TOKEN` | **Yes** | Telegram Bot Token from @BotFather | `8841562162:AAE-...` |
 | `MONGODB_URI` | **Yes** | MongoDB Atlas connection string | `mongodb+srv://user:pass@cluster.mongodb.net/` |
