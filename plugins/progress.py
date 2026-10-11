@@ -117,7 +117,9 @@ async def progress_for_pyrogram(
         text = build_progress_card(ud_type, current, total, start_time)
 
         try:
-            await message.edit_text(text=text)
+            from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            cancel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Task", callback_data="task_cancel")]])
+            await message.edit_text(text=text, reply_markup=cancel_markup)
         except FloodWait as e:
             await asyncio.sleep(e.value + 0.5)
         except MessageNotModified:

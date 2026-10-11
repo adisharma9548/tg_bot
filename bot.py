@@ -4,13 +4,64 @@ Official Maintainer: @No_MOORESINPS
 Official Bot: https://t.me/chessvideosbot (@chessvideosbot)
 """
 
+import os
+import sqlite3
 from pyrogram import Client
+import pyrogram.storage.file_storage as fs
 from config import API_ID, API_HASH, BOT_TOKEN, STRING_SESSION, LOGIN_SYSTEM
 from database.db import db
 from guard import verify_environment
 
+# =====================================================================
+# High-Concurrency SQLite & Storage Protection Patch
+# Fixes "database is locked" errors during pipelined lookahead transfers
+# and high-worker parallel operations.
+# =====================================================================
+async def _patched_file_storage_open(self):
+    path = self.database
+    file_exists = path.is_file()
+
+    # Use 60s timeout instead of Pyrogram's default 1s
+    self.conn = sqlite3.connect(str(path), timeout=60, check_same_thread=False)
+    try:
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.execute("PRAGMA busy_timeout=60000;")
+        self.conn.execute("PRAGMA synchronous=NORMAL;")
+    except Exception:
+        pass
+
+    if not file_exists:
+        self.create()
+    else:
+        self.update()
+
+    try:
+        with self.conn:
+            self.conn.execute("VACUUM")
+    except Exception:
+        pass
+
+fs.FileStorage.open = _patched_file_storage_open
+
+
+def configure_sqlite_pragmas():
+    """Ensures existing SQLite database files are initialized with WAL mode and busy timeouts."""
+    for db_file in ["bot_session.session", "database/bot.db"]:
+        if os.path.exists(db_file):
+            try:
+                conn = sqlite3.connect(db_file, timeout=60)
+                conn.execute("PRAGMA journal_mode=WAL;")
+                conn.execute("PRAGMA busy_timeout=60000;")
+                conn.execute("PRAGMA synchronous=NORMAL;")
+                conn.close()
+            except Exception:
+                pass
+
+configure_sqlite_pragmas()
+
+
 if STRING_SESSION is not None and LOGIN_SYSTEM == False:
-    UserClient = Client("user_session", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
+    UserClient = Client("user_session", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION, in_memory=True)
     UserClient.start()
 else:
     UserClient = None
@@ -59,4 +110,3 @@ if __name__ == "__main__":
         exit(1)
     bot = Bot()
     bot.run()
-

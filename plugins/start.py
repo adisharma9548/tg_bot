@@ -154,31 +154,119 @@ async def get_destination(client: Client, message: Message):
 LOGO_PATH = "logo.jpg"
 DEFAULT_THUMB = "database/thumbs/default.jpg"
 
-# Start command
+def get_start_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📥 How to Download", callback_data="help_download"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="set_menu_main")
+        ],
+        [
+            InlineKeyboardButton("🔑 Connect Account", callback_data="ui_login_info"),
+            InlineKeyboardButton("📊 System Status", callback_data="ui_status_info")
+        ],
+        [
+            InlineKeyboardButton("📚 Topic Transfer", callback_data="ui_topic_info"),
+            InlineKeyboardButton("🧹 Clear Chat", callback_data="ui_clear_prompt")
+        ],
+        [
+            InlineKeyboardButton("🌐 Web Downloader", callback_data="help_web"),
+            InlineKeyboardButton("🏷️ Custom Renamer", callback_data="help_cleaner")
+        ]
+    ])
+
+
+async def build_settings_panel(user_id: int):
+    upload_doc = await db.get_upload_mode(user_id)
+    silent_on = await db.get_silent(user_id)
+    to_saved = await db.get_to_saved(user_id)
+    thumb_path = await db.get_thumb(user_id)
+    has_thumb = bool(thumb_path and os.path.exists(thumb_path))
+    caption = await db.get_caption(user_id)
+    has_caption = bool(caption)
+    prefix = await db.get_prefix(user_id)
+    removals = await db.get_removals(user_id)
+    rem_count = len(removals) if removals else 0
+
+    mode_label = "📁 Document" if upload_doc else "🎥 Video"
+    silent_label = "🔕 Muted" if silent_on else "🔔 Sound ON"
+    dest_label = "📥 Saved Messages" if to_saved else "💬 Bot Chat"
+    thumb_label = "✅ Custom Set" if has_thumb else "❌ Default Logo"
+    cap_label = "✅ Custom Active" if has_caption else "❌ Original Post"
+    pfx_label = f"`{prefix}`" if prefix else "_None_"
+    rem_label = f"`{rem_count} active`" if rem_count else "_None_"
+
+    text = (
+        "⚙️ **Personal Settings & Delivery Preferences**\n\n"
+        f"> 🎬 **Upload Format** • {mode_label}\n"
+        f"> 🔔 **Notification** • {silent_label}\n"
+        f"> 📍 **Destination** • {dest_label}\n"
+        f"> 🖼️ **Thumbnail** • {thumb_label}\n"
+        f"> 📝 **Caption** • {cap_label}\n"
+        f"> 🏷️ **Filename Prefix** • {pfx_label}\n"
+        f"> 🚫 **Word Removals** • {rem_label}\n\n"
+        "💡 *Tap the buttons below to toggle options or manage customizations:*"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"🎬 Mode: {mode_label}", callback_data="set_mode_toggle"),
+            InlineKeyboardButton(f"🔔 {silent_label}", callback_data="set_silent_toggle")
+        ],
+        [
+            InlineKeyboardButton(f"📍 Dest: {dest_label}", callback_data="set_dest_toggle")
+        ],
+        [
+            InlineKeyboardButton("🖼️ Thumbnail Menu", callback_data="set_thumb_menu"),
+            InlineKeyboardButton("📝 Caption Menu", callback_data="set_caption_menu")
+        ],
+        [
+            InlineKeyboardButton("🏷️ Prefix & Filter Menu", callback_data="set_tags_menu")
+        ],
+        [
+            InlineKeyboardButton("🔄 Reset All to Defaults", callback_data="set_reset_confirm")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="help_main"),
+            InlineKeyboardButton("❌ Close", callback_data="help_close")
+        ]
+    ])
+    return text, markup
+
+
+# Start command with Rich Interactive Buttons
 @Client.on_message(filters.command(["start"]) & filters.private)
 async def send_start(client: Client, message: Message):
     if not await db.is_user_exist(message.from_user.id):
         await db.add_user(message.from_user.id, message.from_user.first_name)
     start_text = (
         f"👋 **Hi {message.from_user.mention}**, I am **Aditya's Save Restricted Content Bot**.\n\n"
-        f"• Connect your account with **/login** to access restricted chats.\n"
-        f"• Check commands and link syntax with **/help**.\n"
-        f"• Check storage and settings with **/status**.\n"
-        f"• Auto-cleaner is **always active** for all files (PDF, ZIP, APK, MP4, MP3, etc.)."
+        f"• High-speed pipelined lookahead engine with live queue monitor.\n"
+        f"• Auto-cleaner is **always active** for all files (PDF, ZIP, APK, MP4, MP3, etc.).\n"
+        f"• Single-task concurrency protection with instant file purging.\n\n"
+        f"Select an option below to get started:"
     )
     if os.path.exists(LOGO_PATH):
         await client.send_photo(
             chat_id=message.chat.id,
             photo=LOGO_PATH,
             caption=start_text,
+            reply_markup=get_start_keyboard(),
             reply_to_message_id=message.id
         )
     else:
         await client.send_message(
             chat_id=message.chat.id,
             text=start_text,
+            reply_markup=get_start_keyboard(),
             reply_to_message_id=message.id
         )
+
+
+# Interactive Settings command
+@Client.on_message(filters.command(["settings"]) & filters.private)
+async def send_settings_command(client: Client, message: Message):
+    text, markup = await build_settings_panel(message.from_user.id)
+    await message.reply(text=text, reply_markup=markup)
 
 
 # Interactive Help command
@@ -192,14 +280,391 @@ async def send_help(client: Client, message: Message):
     )
 
 
-# Help Callback Query Handler
-@Client.on_callback_query(filters.regex(r"^help_"))
-async def help_callback(client: Client, query: CallbackQuery):
+# Task Cancellation Callback (from progress cards or busy prompts)
+@Client.on_callback_query(filters.regex(r"^task_cancel$"))
+async def cb_task_cancel(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if not TaskManager.is_user_busy(user_id):
+        await query.answer("ℹ️ You have no active task running.", show_alert=True)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        return
+
+    TaskManager.cancel_task(user_id)
+    TaskManager.purge_user_files(user_id)
+    try:
+        await db.clear_batch_task(user_id)
+    except Exception:
+        pass
+
+    await query.answer("🛑 Task cancelled & files purged!", show_alert=True)
+    try:
+        await query.message.edit_text(
+            "🛑 **Task cancelled successfully.**\n\n"
+            "All downloaded temporary files and cache have been purged from the backend server to prevent disk clutter.\n"
+            "You can start a new transfer anytime."
+        )
+    except Exception:
+        pass
+
+
+# Settings & Interactive UI Callback Handlers
+@Client.on_callback_query(filters.regex(r"^(set_|ui_|help_)"))
+async def general_ui_callback(client: Client, query: CallbackQuery):
     data = query.data
-    if data == "help_close":
+    user_id = query.from_user.id
+
+    # 1. Close buttons
+    if data in ("help_close", "set_close"):
         await query.message.delete()
         return
 
+    # 2. Main settings panel
+    if data == "set_menu_main":
+        text, markup = await build_settings_panel(user_id)
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    # 3. Settings Toggles
+    if data == "set_mode_toggle":
+        curr = await db.get_upload_mode(user_id)
+        await db.set_upload_mode(user_id, not curr)
+        text, markup = await build_settings_panel(user_id)
+        await query.answer(f"Switched to {'Document' if not curr else 'Video'} mode!")
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "set_silent_toggle":
+        curr = await db.get_silent(user_id)
+        await db.set_silent(user_id, not curr)
+        text, markup = await build_settings_panel(user_id)
+        await query.answer(f"Silent delivery: {'Muted (ON)' if not curr else 'Sound (OFF)'}!")
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "set_dest_toggle":
+        curr = await db.get_to_saved(user_id)
+        await db.set_to_saved(user_id, not curr)
+        text, markup = await build_settings_panel(user_id)
+        await query.answer(f"Destination: {'Saved Messages' if not curr else 'Bot Chat'}!")
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    # 4. Thumbnail Sub-menu
+    if data == "set_thumb_menu":
+        thumb_path = await db.get_thumb(user_id)
+        has_thumb = bool(thumb_path and os.path.exists(thumb_path))
+        text = (
+            "🖼️ **Custom Thumbnail Settings**\n\n"
+            f"> Status: {'✅ Active custom thumbnail' if has_thumb else '❌ Default logo thumbnail'}\n\n"
+            "• To set a new thumbnail: Send or reply to any photo with `/set_thumb`.\n"
+            "• Tap below to preview or delete your current thumbnail:"
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("👁️ View Thumbnail", callback_data="set_thumb_view"),
+                InlineKeyboardButton("🗑️ Delete Thumbnail", callback_data="set_thumb_del")
+            ],
+            [
+                InlineKeyboardButton("🔙 Back to Settings", callback_data="set_menu_main")
+            ]
+        ])
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "set_thumb_view":
+        thumb_path = await db.get_thumb(user_id)
+        if thumb_path and os.path.exists(thumb_path):
+            await client.send_photo(chat_id=user_id, photo=thumb_path, caption="🖼️ **Your current custom thumbnail.**")
+            await query.answer("Thumbnail sent to chat!")
+        else:
+            await query.answer("❌ No custom thumbnail set! Reply to a photo with /set_thumb.", show_alert=True)
+        return
+
+    if data == "set_thumb_del":
+        thumb_path = await db.get_thumb(user_id)
+        if thumb_path and os.path.exists(thumb_path):
+            try:
+                os.remove(thumb_path)
+            except Exception:
+                pass
+        await db.del_thumb(user_id)
+        await query.answer("🗑️ Custom thumbnail deleted!", show_alert=True)
+        text, markup = await build_settings_panel(user_id)
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    # 5. Caption Sub-menu
+    if data == "set_caption_menu":
+        caption = await db.get_caption(user_id)
+        has_caption = bool(caption)
+        cap_preview = f"`{caption}`" if has_caption else "_Using original post caption_"
+        text = (
+            "📝 **Custom Caption Settings**\n\n"
+            f"> Current: {cap_preview}\n\n"
+            "• To set custom template: Send `/set_caption <text>`\n"
+            "• Dynamic tags supported: `{filename}`, `{size}`, `{caption}`\n"
+            "• Tap below to manage:"
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("👁️ View Caption", callback_data="set_caption_view"),
+                InlineKeyboardButton("🗑️ Reset to Original", callback_data="set_caption_del")
+            ],
+            [
+                InlineKeyboardButton("🔙 Back to Settings", callback_data="set_menu_main")
+            ]
+        ])
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "set_caption_view":
+        caption = await db.get_caption(user_id)
+        if caption:
+            await query.answer("Caption sent to chat!")
+            await client.send_message(chat_id=user_id, text=f"📝 **Your current custom caption:**\n\n`{caption}`")
+        else:
+            await query.answer("❌ No custom caption template set.", show_alert=True)
+        return
+
+    if data == "set_caption_del":
+        await db.del_caption(user_id)
+        await query.answer("🗑️ Caption reset to original post caption!", show_alert=True)
+        text, markup = await build_settings_panel(user_id)
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    # 6. Prefix & Tag Filter Sub-menu
+    if data == "set_tags_menu":
+        prefix = await db.get_prefix(user_id)
+        removals = await db.get_removals(user_id)
+        rem_str = ", ".join(removals) if removals else "None"
+        text = (
+            "🏷️ **Prefix & Filename Cleaner Settings**\n\n"
+            f"> 🏷️ Custom Prefix: `{prefix or 'None'}`\n"
+            f"> 🚫 Custom Word Removals: `{rem_str}`\n\n"
+            "• Set Prefix: `/set_prefix <text>`\n"
+            "• Add Removal Words: `/replace <word1, word2, ...>`\n"
+            "• Auto-cleaner for ads and promo tags is **always active**!"
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🗑️ Clear Prefix", callback_data="set_prefix_del"),
+                InlineKeyboardButton("🗑️ Clear Word Filters", callback_data="set_replace_del")
+            ],
+            [
+                InlineKeyboardButton("🔙 Back to Settings", callback_data="set_menu_main")
+            ]
+        ])
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "set_prefix_del":
+        await db.del_prefix(user_id)
+        await query.answer("🗑️ Custom prefix cleared!", show_alert=True)
+        text, markup = await build_settings_panel(user_id)
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "set_replace_del":
+        await db.del_removals(user_id)
+        await query.answer("🗑️ Custom word removals cleared!", show_alert=True)
+        text, markup = await build_settings_panel(user_id)
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    # 7. Reset Confirm & Execute
+    if data == "set_reset_confirm":
+        text = (
+            "⚠️ **Reset All Settings to Defaults?**\n\n"
+            "This will revert:\n"
+            "• Thumbnail ➔ Default logo\n"
+            "• Caption ➔ Original post caption\n"
+            "• Format ➔ Video streamable player\n"
+            "• Silent Delivery ➔ Sound (ON)\n"
+            "• Destination ➔ Bot Chat\n"
+            "• Prefix & Word Filters ➔ Cleared\n\n"
+            "Are you sure you want to proceed?"
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚠️ Yes, Reset Everything", callback_data="set_reset_execute"),
+                InlineKeyboardButton("🔙 Cancel", callback_data="set_menu_main")
+            ]
+        ])
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "set_reset_execute":
+        TaskManager.cancel_task(user_id)
+        TaskManager.purge_user_files(user_id)
+        thumb_path = f"{THUMB_DIR}/{user_id}.jpg"
+        if os.path.exists(thumb_path):
+            try:
+                os.remove(thumb_path)
+            except Exception:
+                pass
+        await db.clear_all_user_settings(user_id)
+        await query.answer("⚙️ All settings reset to default!", show_alert=True)
+        text, markup = await build_settings_panel(user_id)
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    # 8. Start Menu UI Callbacks
+    if data == "ui_login_info":
+        is_logged_in = bool(await db.get_session(user_id))
+        status_str = "✅ **Account Connected & Active**" if is_logged_in else "❌ **No Account Connected**"
+        text = (
+            f"🔑 **Telegram User Account Connection**\n\n"
+            f"> Status: {status_str}\n\n"
+            "**Why connect your account?**\n"
+            "Connecting your account lets you download files from private channels and closed forum topics that your account has joined.\n\n"
+            "• **To Connect:** Send `/login` and follow the instructions.\n"
+            "• **To Disconnect:** Send `/logout` anytime."
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔙 Back to Main Menu", callback_data="help_main"),
+                InlineKeyboardButton("❌ Close", callback_data="help_close")
+            ]
+        ])
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "ui_topic_info":
+        text = (
+            "📚 **Forum Topic Transfer Guide**\n\n"
+            "Transfer an entire Forum Topic / Thread in one command!\n\n"
+            "**Syntax:**\n"
+            "`/topic https://t.me/c/<chat_id>/<topic_id>/<msg_id>`\n"
+            "Or:\n"
+            "`/topic https://t.me/c/<chat_id>/<topic_id>`\n\n"
+            "**Key Features:**\n"
+            "• Scans every message, lecture video, and PDF in the thread.\n"
+            "• Preserves sequence with organized file numbers and parts.\n"
+            "• Concurrently pre-fetches next item while current item uploads.\n"
+            "• Generates full Verification Checklist on completion!"
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔙 Back to Main Menu", callback_data="help_main"),
+                InlineKeyboardButton("❌ Close", callback_data="help_close")
+            ]
+        ])
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "ui_clear_prompt":
+        text = (
+            "🧹 **Clear Entire Chat History?**\n\n"
+            "This will delete conversation messages from both your side and the bot's side, purge any leftover downloads, and reset your workspace.\n\n"
+            "Tap below to confirm:"
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🧹 Confirm & Clear Now", callback_data="ui_clear_execute"),
+                InlineKeyboardButton("🔙 Cancel", callback_data="help_main")
+            ]
+        ])
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    if data == "ui_clear_execute":
+        await query.answer("🧹 Cleaning conversation history...")
+        TaskManager.cancel_task(user_id)
+        TaskManager.purge_user_files(user_id)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await clear_chat_history(client, query.message)
+        return
+
+    if data == "ui_status_info":
+        total, used, free = shutil.disk_usage(".")
+        total_gb = total / (1024 ** 3)
+        free_gb = free / (1024 ** 3)
+        is_logged_in = bool(await db.get_session(user_id))
+        upload_mode = "📁 Document" if await db.get_upload_mode(user_id) else "🎥 Video"
+        silent = "🔕 ON" if await db.get_silent(user_id) else "🔔 OFF"
+        to_saved = "📥 Saved Messages" if await db.get_to_saved(user_id) else "💬 Bot Chat"
+
+        text = (
+            "📊 **Operational System & Profile Status**\n\n"
+            f"> 👤 **Account** • {'✅ Connected' if is_logged_in else '❌ Not Connected (/login)'}\n"
+            f"> 🎬 **Upload Mode** • `{upload_mode}`\n"
+            f"> 🔔 **Silent Mode** • `{silent}`\n"
+            f"> 📍 **Destination** • `{to_saved}`\n"
+            f"> 💾 **Disk Free** • `{free_gb:.1f} GB` / `{total_gb:.1f} GB`\n"
+            f"> 🛑 **Single Task Policy** • `Active`\n"
+            f"> 🧹 **Auto-Cleaner** • `Active`"
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚙️ Open Settings", callback_data="set_menu_main"),
+                InlineKeyboardButton("🔙 Back", callback_data="help_main")
+            ],
+            [
+                InlineKeyboardButton("❌ Close", callback_data="help_close")
+            ]
+        ])
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+
+    # 9. Standard Help Pages
     pages = {
         "help_main": (HELP_MAIN_TXT, get_help_main_markup()),
         "help_download": (HELP_DOWNLOAD_TXT, get_help_back_markup()),
@@ -213,7 +678,7 @@ async def help_callback(client: Client, query: CallbackQuery):
         text, markup = pages[data]
         try:
             await query.message.edit_text(text=text, reply_markup=markup, disable_web_page_preview=True)
-        except:
+        except Exception:
             pass
 
 
@@ -362,27 +827,32 @@ async def send_status(client: Client, message: Message):
     removals = await db.get_removals(message.from_user.id)
     batch_task = await db.get_batch_task(message.from_user.id)
 
-    batch_info = "None"
-    if batch_task and batch_task.get('last_id') and batch_task.get('to_id'):
-        batch_info = f"Post {batch_task['last_id']} of {batch_task['to_id']} (/resume)"
+    status_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚙️ Open Settings", callback_data="set_menu_main"),
+            InlineKeyboardButton("🧹 Clear Chat", callback_data="ui_clear_prompt")
+        ],
+        [
+            InlineKeyboardButton("❌ Close", callback_data="help_close")
+        ]
+    ])
 
     text = (
         "📊 **Bot Status & Settings Dashboard**\n\n"
-        f"👤 **Account:** {'✅ Connected' if is_logged_in else '❌ Not Logged In (/login)'}\n"
-        f"🎬 **Upload Mode:** `{upload_mode}` (/mode)\n"
-        f"🔔 **Silent Upload:** `{silent}` (/silent)\n"
-        f"📍 **Destination:** `{to_saved}` (/to_saved)\n"
-        f"🧹 **Filename Cleaner:** `✅ Always Active`\n"
-        f"🏷️ **Prefix:** `{prefix or 'None'}` (/set_prefix)\n"
-        f"🚫 **Custom Removals:** `{', '.join(removals) if removals else 'None'}` (/replace)\n"
-        f"🖼️ **Thumbnail:** {'✅ Active' if has_thumb else '❌ Default (/set_thumb)'}\n"
-        f"📝 **Caption:** {'✅ Active' if custom_caption else '❌ Original (/set_caption)'}\n"
-        f"🔄 **Unfinished Batch:** `{batch_info}`\n\n"
+        f"> 👤 **Account** • {'✅ Connected' if is_logged_in else '❌ Not Logged In (/login)'}\n"
+        f"> 🎬 **Upload Mode** • `{upload_mode}` (/mode)\n"
+        f"> 🔔 **Silent Upload** • `{silent}` (/silent)\n"
+        f"> 📍 **Destination** • `{to_saved}` (/to_saved)\n"
+        f"> 🧹 **Filename Cleaner** • `✅ Always Active`\n"
+        f"> 🏷️ **Prefix** • `{prefix or 'None'}` (/set_prefix)\n"
+        f"> 🚫 **Custom Removals** • `{', '.join(removals) if removals else 'None'}` (/replace)\n"
+        f"> 🖼️ **Thumbnail** • {'✅ Active' if has_thumb else '❌ Default Logo'}\n"
+        f"> 📝 **Caption** • {'✅ Custom Template' if custom_caption else '❌ Original Post'}\n\n"
         f"💾 **Host PC Storage:**\n"
         f"• Free: `{free_gb:.1f} GB` / `{total_gb:.1f} GB`\n"
         f"• Used: `{used_gb:.1f} GB`"
     )
-    await message.reply(text)
+    await message.reply(text, reply_markup=status_markup)
 
 
 # Upload Mode toggle command
@@ -558,23 +1028,36 @@ async def handle_resume_command(client: Client, message: Message):
 @Client.on_message(filters.command(["topic"]) & filters.private)
 async def crawl_topic_command(client: Client, message: Message):
     if len(message.command) < 2:
+        guide_markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📖 Full Topic Guide", callback_data="ui_topic_info"),
+                InlineKeyboardButton("❌ Close", callback_data="help_close")
+            ]
+        ])
         return await message.reply(
             "ℹ️ **How to transfer an entire Forum Topic:**\n\n"
-            "Send: `/topic <topic_link>`\n"
-            "Example:\n`/topic https://t.me/c/3641059847/1321/1413`\n"
-            "Or:\n`/topic https://t.me/c/3641059847/1321`\n\n"
-            "• Automatically scans all files inside that topic\n"
-            "• Preserves sequence by lecture number & parts\n"
-            "• Generates a full Verification & Audit Checklist!"
+            "Send: `/topic <topic_link>`\n\n"
+            "**Examples:**\n"
+            "• `/topic https://t.me/c/3641059847/1321/1413`\n"
+            "• `/topic https://t.me/c/3641059847/1321`\n\n"
+            "• Scans every message, video, and PDF in the topic thread.\n"
+            "• Preserves sequence by lecture number & parts.\n"
+            "• Generates full Verification Checklist upon completion!",
+            reply_markup=guide_markup
         )
 
     # Strict single-task concurrency check per user
     if TaskManager.is_user_busy(message.from_user.id):
         wait_time = max(WAITING_TIME, 10)
+        cancel_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Cancel Active Task", callback_data="task_cancel")
+        ]])
         return await message.reply_text(
             f"⏳ **Another task is currently in progress!**\n\n"
-            f"Please send `/cancel` to abort your current task or wait until it finishes (~{wait_time}s).\n\n"
-            f"💡 *Only one active task is allowed at a time to prevent server congestion and DDoS risks.*"
+            f"• Please wait until your ongoing task finishes (~{wait_time}s).\n"
+            f"• Or tap below to cancel it immediately.\n\n"
+            f"💡 *Strict single-task policy is active to protect server storage.*",
+            reply_markup=cancel_markup
         )
 
     link = message.command[1].strip()
@@ -592,7 +1075,15 @@ async def crawl_topic_command(client: Client, message: Message):
     try:
         await run_topic_crawl(client, message, chat_id, topic_id)
     except Exception as e:
-        await message.reply(f"❌ **Topic Transfer Error:** `{e}`")
+        err_str = str(e)
+        if "locked" in err_str.lower():
+            await asyncio.sleep(2)
+            try:
+                await run_topic_crawl(client, message, chat_id, topic_id)
+                return
+            except Exception as retry_err:
+                err_str = str(retry_err)
+        await message.reply(f"⚠️ **Topic Transfer Notice:** Unable to complete transfer (`{err_str}`). Please try again shortly.")
 
 
 # Main Save / Link Handler (Processes raw links, non-commands)
@@ -604,10 +1095,15 @@ async def handle_message_transfer(client: Client, message: Message):
     # Strict single-task concurrency check per user
     if TaskManager.is_user_busy(message.from_user.id):
         wait_time = max(WAITING_TIME, 10)
+        cancel_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛑 Cancel Active Task", callback_data="task_cancel")
+        ]])
         return await message.reply_text(
             f"⏳ **Another task is currently in progress!**\n\n"
-            f"Please send `/cancel` to abort your ongoing task or wait until it finishes (~{wait_time}s).\n\n"
-            f"💡 *Only one active task is allowed at a time to prevent server congestion and DDoS risks.*"
+            f"• Please wait until your ongoing task finishes (~{wait_time}s).\n"
+            f"• Or tap below to cancel it immediately.\n\n"
+            f"💡 *Strict single-task policy is active to protect server storage.*",
+            reply_markup=cancel_markup
         )
 
     # 1. External Web URLs (yt-dlp)
@@ -1070,7 +1566,10 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
         )
 
     except Exception as e:
-        await client.send_message(message.chat.id, f"❌ **Error during topic transfer:** `{e}`")
+        err_msg = str(e)
+        if "locked" in err_msg.lower():
+            err_msg = "Database lock resolved. Please re-run your transfer."
+        await client.send_message(message.chat.id, f"⚠️ **Topic Transfer Notice:** `{err_msg}`")
     finally:
         if LOGIN_SYSTEM == True and acc:
             try:

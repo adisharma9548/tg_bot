@@ -13,9 +13,11 @@ class SQLiteDatabase:
         self._init_db()
 
     def _get_connection(self):
-        conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
+        conn = sqlite3.connect(self.db_path, timeout=60, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=60000;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
         return conn
 
     def _init_db(self):

@@ -105,7 +105,9 @@ class DashboardManager:
             )
 
             try:
-                await self.status_msg.edit_text(text)
+                from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                cancel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Crawl", callback_data="task_cancel")]])
+                await self.status_msg.edit_text(text, reply_markup=cancel_markup)
             except FloodWait as e:
                 await asyncio.sleep(e.value + 1)
             except MessageNotModified:
