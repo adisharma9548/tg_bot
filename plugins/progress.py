@@ -111,8 +111,8 @@ async def progress_for_pyrogram(
     msg_id = f"{message.chat.id}_{message.id}_{ud_type}"
     last_update = PROGRESS_CACHE.get(msg_id, 0)
 
-    # Throttled edit every 2.8 seconds or when 100% complete
-    if (now - last_update) >= 2.8 or current == total:
+    # Throttled edit every 4.0 seconds or when 100% complete to avoid Telegram rate limits
+    if (now - last_update) >= 4.0 or current == total:
         PROGRESS_CACHE[msg_id] = now
         text = build_progress_card(ud_type, current, total, start_time)
 
@@ -121,7 +121,9 @@ async def progress_for_pyrogram(
             cancel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Task", callback_data="task_cancel")]])
             await message.edit_text(text=text, reply_markup=cancel_markup)
         except FloodWait as e:
-            await asyncio.sleep(e.value + 0.5)
+            # CRITICAL: DO NOT sleep here! Sleeping halts the active data stream and causes socket disconnects.
+            # Instead, postpone next edit attempt until FloodWait expires:
+            PROGRESS_CACHE[msg_id] = now + e.value + 1
         except MessageNotModified:
             pass
         except Exception:

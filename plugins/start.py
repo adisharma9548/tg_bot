@@ -1155,7 +1155,15 @@ async def get_user_client(user_id: int, target_chat_id: int = None):
 
     for cand_uid, cand_session, cand_aid, cand_ahash in candidates:
         try:
-            cand_acc = Client(f"acc_{cand_uid}_{int(time.time()*1000)%10000}", session_string=cand_session, api_id=cand_aid, api_hash=cand_ahash, in_memory=True)
+            cand_acc = Client(
+                f"acc_{cand_uid}_{int(time.time()*1000)%10000}",
+                session_string=cand_session,
+                api_id=cand_aid,
+                api_hash=cand_ahash,
+                in_memory=True,
+                sleep_threshold=60,
+                max_concurrent_transmissions=2
+            )
             await cand_acc.connect()
             if target_chat_id:
                 try:

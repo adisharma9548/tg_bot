@@ -78,8 +78,9 @@ class Bot(Client):
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
             plugins=dict(root="plugins"),
-            workers=150,
-            sleep_threshold=5
+            workers=20,
+            sleep_threshold=60,
+            max_concurrent_transmissions=2
         )
 
       
