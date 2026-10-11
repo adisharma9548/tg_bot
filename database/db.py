@@ -2,7 +2,7 @@ import os
 import sqlite3
 import asyncio
 import threading
-from config import DB_NAME, DB_URI, USERS_COLLECTION, BATCH_TASKS_COLLECTION
+from config import DB_NAME, DB_URI, USERS_COLLECTION
 
 class SQLiteDatabase:
     """Local SQLite database stored directly on this device."""
@@ -55,18 +55,6 @@ class SQLiteDatabase:
                         except sqlite3.OperationalError:
                             pass
 
-                    conn.execute("""
-                        CREATE TABLE IF NOT EXISTS batch_tasks (
-                            user_id INTEGER PRIMARY KEY,
-                            link_prefix TEXT,
-                            from_id INTEGER,
-                            to_id INTEGER,
-                            last_id INTEGER,
-                            chat_id TEXT,
-                            task_type TEXT,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
             finally:
                 conn.close()
 
@@ -269,55 +257,8 @@ class SQLiteDatabase:
     async def del_removals(self, id):
         await asyncio.to_thread(self._set_field, id, "removals", None)
 
-    # Batch Tasks (Auto-Resume)
-    def _save_batch_task(self, user_id, link_prefix, from_id, to_id, last_id, chat_id, task_type):
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                with conn:
-                    conn.execute("""
-                        INSERT INTO batch_tasks (user_id, link_prefix, from_id, to_id, last_id, chat_id, task_type, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                        ON CONFLICT(user_id) DO UPDATE SET
-                            link_prefix = excluded.link_prefix,
-                            from_id = excluded.from_id,
-                            to_id = excluded.to_id,
-                            last_id = excluded.last_id,
-                            chat_id = excluded.chat_id,
-                            task_type = excluded.task_type,
-                            updated_at = CURRENT_TIMESTAMP
-                    """, (int(user_id), link_prefix, int(from_id), int(to_id), int(last_id), str(chat_id), task_type))
-            finally:
-                conn.close()
-
-    async def save_batch_task(self, user_id, link_prefix, from_id, to_id, last_id, chat_id, task_type):
-        await asyncio.to_thread(self._save_batch_task, user_id, link_prefix, from_id, to_id, last_id, chat_id, task_type)
-
-    def _get_batch_task(self, user_id):
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                cur = conn.cursor()
-                cur.execute("SELECT * FROM batch_tasks WHERE user_id = ?", (int(user_id),))
-                row = cur.fetchone()
-                return dict(row) if row else None
-            finally:
-                conn.close()
-
-    async def get_batch_task(self, user_id):
-        return await asyncio.to_thread(self._get_batch_task, user_id)
-
-    def _clear_batch_task(self, user_id):
-        with self._lock:
-            conn = self._get_connection()
-            try:
-                with conn:
-                    conn.execute("DELETE FROM batch_tasks WHERE user_id = ?", (int(user_id),))
-            finally:
-                conn.close()
-
     async def clear_batch_task(self, user_id):
-        await asyncio.to_thread(self._clear_batch_task, user_id)
+        pass
 
     def _clear_all_user_settings(self, user_id):
         with self._lock:
@@ -335,7 +276,6 @@ class SQLiteDatabase:
                             removals = NULL
                         WHERE id = ?
                     """, (int(user_id),))
-                    conn.execute("DELETE FROM batch_tasks WHERE user_id = ?", (int(user_id),))
             finally:
                 conn.close()
 
@@ -370,7 +310,6 @@ if DB_URI and (DB_URI.startswith("mongodb://") or DB_URI.startswith("mongodb+srv
                 self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
                 self.db = self._client[database_name]
                 self.col = self.db[USERS_COLLECTION]
-                self.tasks_col = self.db[BATCH_TASKS_COLLECTION]
 
             async def ping(self):
                 await self.db.command("ping")
@@ -506,37 +445,8 @@ if DB_URI and (DB_URI.startswith("mongodb://") or DB_URI.startswith("mongodb+srv
             async def del_removals(self, id):
                 await self.col.update_one({'id': int(id)}, {'$set': {'removals': None}})
 
-            async def save_batch_task(self, user_id, link_prefix, from_id, to_id, last_id, chat_id, task_type):
-                await self.tasks_col.update_one(
-                    {"user_id": int(user_id)},
-                    {"$set": {
-                        "user_id": int(user_id),
-                        "link_prefix": link_prefix,
-                        "from_id": int(from_id),
-                        "to_id": int(to_id),
-                        "last_id": int(last_id),
-                        "chat_id": str(chat_id),
-                        "task_type": task_type
-                    }},
-                    upsert=True
-                )
-
-            async def get_batch_task(self, user_id):
-                doc = await self.tasks_col.find_one({"user_id": int(user_id)})
-                if not doc:
-                    return None
-                return {
-                    "user_id": doc.get("user_id"),
-                    "link_prefix": doc.get("link_prefix"),
-                    "from_id": doc.get("from_id"),
-                    "to_id": doc.get("to_id"),
-                    "last_id": doc.get("last_id"),
-                    "chat_id": doc.get("chat_id"),
-                    "task_type": doc.get("task_type")
-                }
-
             async def clear_batch_task(self, user_id):
-                await self.tasks_col.delete_one({"user_id": int(user_id)})
+                pass
 
             async def clear_all_user_settings(self, user_id):
                 await self.col.update_one({'id': int(user_id)}, {'$set': {

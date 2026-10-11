@@ -11,8 +11,7 @@ OUTPUT_ZIP = "tg_bot_aws.zip"
 INCLUDE_DIRS = [
     "plugins",
     "database",
-    ".ebextensions",
-    ".github"
+    ".ebextensions"
 ]
 
 INCLUDE_FILES = [
@@ -26,13 +25,8 @@ INCLUDE_FILES = [
     "runner.py",
     "requirements.txt",
     "docker-compose.yml",
-    ".cursorrules",
-    "CLAUDE.md",
-    "AGENT_PROMPT.md",
     "README.md",
-    "AWS_DEPLOYMENT_GUIDE.md",
-    "logo.jpg",
-    "migrate_sqlite_to_mongodb.py"
+    "logo.jpg"
 ]
 
 EXCLUDE_EXTS = [

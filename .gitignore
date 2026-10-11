@@ -1,8 +1,7 @@
 .env
 .env.*
 !.env.example
-*.session
-*.session-journal
+*.session*
 *.db
 *.db-shm
 *.db-wal

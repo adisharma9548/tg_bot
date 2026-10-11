@@ -42,7 +42,6 @@ MONGODB_URI = (os.environ.get("MONGODB_URI") or os.environ.get("DB_URI", "")).st
 DB_URI = MONGODB_URI
 DB_NAME = os.environ.get("DB_NAME", "sih26044").strip()
 USERS_COLLECTION = os.environ.get("USERS_COLLECTION", "tg_users").strip()
-BATCH_TASKS_COLLECTION = os.environ.get("BATCH_TASKS_COLLECTION", "tg_batch_tasks").strip()
 
 # Delay in seconds to prevent Telegram flood wait limits
 wait_time_val = os.environ.get("WAITING_TIME", "10").strip()

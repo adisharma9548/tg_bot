@@ -27,8 +27,14 @@ from plugins.strings import (
 )
 from plugins.progress import progress_for_pyrogram, humanbytes
 from plugins.cleaner import rename_file_clean, clean_filename
-from plugins.organizer import parse_tg_link, parse_course_metadata, format_organized_filename, format_organized_caption, AuditTracker
-from plugins.pipeline import run_pipelined_transfer, get_message_type
+from plugins.organizer import (
+    parse_tg_link, 
+    parse_course_metadata, 
+    format_organized_filename, 
+    format_organized_caption, 
+    AuditTracker,
+    get_message_type
+)
 from plugins.ytdl import is_web_url, download_web_media
 from bot import UserClient
 
@@ -117,25 +123,6 @@ class TaskManager:
     def finish_task(cls, user_id: int):
         cls.purge_user_files(user_id)
         cls._active_tasks.pop(user_id, None)
-
-    # Compatibility shim for legacy dictionary lookups
-    class _CompatDict:
-        def get(self, user_id, default=None):
-            if user_id in TaskManager._active_tasks:
-                return TaskManager.is_cancelled(user_id)
-            return default
-        def __getitem__(self, user_id):
-            return TaskManager.is_cancelled(user_id)
-        def __setitem__(self, user_id, val):
-            if val:
-                TaskManager.cancel_task(user_id)
-            else:
-                TaskManager.start_task(user_id)
-
-    IS_BATCH = _CompatDict()
-
-# Backwards compatibility alias
-batch_temp = TaskManager
 
 
 async def get_destination(client: Client, message: Message):

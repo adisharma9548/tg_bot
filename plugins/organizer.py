@@ -13,6 +13,18 @@ def clean_title_str(t: str) -> str:
     return t.strip(" .-_")
 
 
+def get_message_type(msg):
+    """Detects content type of a message (Video, Document, Audio, Photo, Text, etc.)."""
+    if not msg or getattr(msg, "empty", False):
+        return None
+    for t in ["document", "video", "audio", "photo", "animation", "sticker", "voice", "video_note"]:
+        if hasattr(msg, t) and getattr(msg, t) is not None:
+            return t.capitalize()
+    if hasattr(msg, "text") and msg.text is not None and msg.text.strip():
+        return "Text"
+    return None
+
+
 def parse_tg_link(url: str):
     """
     Parses any Telegram message link, forum topic link, or post range.
