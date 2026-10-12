@@ -7,24 +7,28 @@ Official Bot: https://t.me/chessvideosbot (@chessvideosbot)
 import os
 import time
 from flask import Flask, jsonify
-from config import MONGODB_URI, DB_NAME
+from config import DYNAMODB_TABLE_NAME, AWS_DEFAULT_REGION
 
 app = Flask(__name__)
 BOOT_TIME = time.time()
 
 
 def check_database_health() -> str:
-    """Verifies MongoDB connectivity without exposing credentials."""
-    if not MONGODB_URI:
-        return "local_sqlite_fallback"
+    """Verifies AWS DynamoDB or local storage connectivity."""
     try:
-        from pymongo import MongoClient
-        client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=2000)
-        client[DB_NAME or "sih26044"].command("ping")
-        client.close()
-        return "connected"
+        import boto3
+        client = boto3.client("dynamodb", region_name=AWS_DEFAULT_REGION)
+        client.describe_table(TableName=DYNAMODB_TABLE_NAME)
+        return "aws_dynamodb_connected"
     except Exception as e:
-        return f"unreachable ({type(e).__name__})"
+        err_str = str(e)
+        if "ResourceNotFoundException" in err_str:
+            return "aws_dynamodb_ready"
+        elif "AccessDenied" in err_str:
+            return "local_sqlite_fallback (aws_iam_policy_pending)"
+        elif os.path.exists("database/bot.db"):
+            return "local_sqlite_fallback"
+        return f"storage_status ({type(e).__name__})"
 
 
 @app.route("/")
@@ -33,7 +37,7 @@ def health():
     """AWS Elastic Beanstalk & ALB Health Check Endpoint."""
     db_status = check_database_health()
     uptime_sec = int(time.time() - BOOT_TIME)
-    is_ok = db_status in ("connected", "local_sqlite_fallback")
+    is_ok = ("connected" in db_status) or ("sqlite" in db_status) or ("ready" in db_status)
     return jsonify({
         "status": "healthy" if is_ok else "degraded",
         "service": "Save Restricted Content Bot",

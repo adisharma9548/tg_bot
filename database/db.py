@@ -2,10 +2,10 @@ import os
 import sqlite3
 import asyncio
 import threading
-from config import DB_NAME, DB_URI, USERS_COLLECTION
+from config import DYNAMODB_TABLE_NAME, AWS_DEFAULT_REGION
 
 class SQLiteDatabase:
-    """Local SQLite database stored directly on this device."""
+    """Local SQLite database stored directly on this device (database/bot.db)."""
     def __init__(self, db_path="database/bot.db"):
         self.db_path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
@@ -302,166 +302,267 @@ class SQLiteDatabase:
         pass
 
 
-if DB_URI and (DB_URI.startswith("mongodb://") or DB_URI.startswith("mongodb+srv://")):
+class DynamoDatabase:
+    """AWS DynamoDB Database Engine (25 GB free storage on AWS Always Free Tier)."""
+    def __init__(self, table_name="tg_users", region=None):
+        import boto3
+        self.region = region or os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "ap-south-1"
+        self.table_name = table_name
+        self.dynamodb = boto3.resource("dynamodb", region_name=self.region)
+        self._ensure_table()
+        self.table = self.dynamodb.Table(self.table_name)
+
+    def _ensure_table(self):
+        try:
+            tbl = self.dynamodb.Table(self.table_name)
+            tbl.load()
+        except Exception as e:
+            if "ResourceNotFoundException" in str(e):
+                try:
+                    tbl = self.dynamodb.create_table(
+                        TableName=self.table_name,
+                        KeySchema=[{'AttributeName': 'id', 'KeyType': 'HASH'}],
+                        AttributeDefinitions=[{'AttributeName': 'id', 'AttributeType': 'N'}],
+                        BillingMode='PAY_PER_REQUEST'
+                    )
+                    tbl.wait_until_exists()
+                except Exception as create_err:
+                    raise create_err
+            else:
+                raise e
+
+    def new_user(self, id, name):
+        return dict(
+            id=id,
+            name=name,
+            session=None,
+            api_id=None,
+            api_hash=None,
+            thumb=None,
+            caption=None,
+            upload_as_doc=0,
+            silent_mode=0,
+            to_saved=0,
+            prefix=None,
+            removals=None
+        )
+
+    def _add_user(self, id, name):
+        try:
+            self.table.update_item(
+                Key={'id': int(id)},
+                UpdateExpression='SET #n = :n',
+                ExpressionAttributeNames={'#n': 'name'},
+                ExpressionAttributeValues={':n': str(name or "")}
+            )
+        except Exception as e:
+            print(f"DynamoDB add_user error: {e}")
+
+    async def add_user(self, id, name):
+        await asyncio.to_thread(self._add_user, id, name)
+
+    def _is_user_exist(self, id):
+        try:
+            res = self.table.get_item(Key={'id': int(id)}, ProjectionExpression='id')
+            return 'Item' in res
+        except Exception:
+            return False
+
+    async def is_user_exist(self, id):
+        return await asyncio.to_thread(self._is_user_exist, id)
+
+    def _total_users_count(self):
+        try:
+            self.table.load()
+            return self.table.item_count or 0
+        except Exception:
+            return 0
+
+    async def total_users_count(self):
+        return await asyncio.to_thread(self._total_users_count)
+
+    def _get_all_users(self):
+        try:
+            res = self.table.scan()
+            return res.get('Items', [])
+        except Exception:
+            return []
+
+    async def get_all_users(self):
+        users_list = await asyncio.to_thread(self._get_all_users)
+        async def _gen():
+            for u in users_list:
+                yield u
+        return _gen()
+
+    def _delete_user(self, id):
+        try:
+            self.table.delete_item(Key={'id': int(id)})
+        except Exception:
+            pass
+
+    async def delete_user(self, id):
+        await asyncio.to_thread(self._delete_user, id)
+
+    def _set_field(self, id, field, value):
+        try:
+            if value is None:
+                self.table.update_item(
+                    Key={'id': int(id)},
+                    UpdateExpression=f'REMOVE {field}'
+                )
+            else:
+                self.table.update_item(
+                    Key={'id': int(id)},
+                    UpdateExpression=f'SET {field} = :v',
+                    ExpressionAttributeValues={':v': value}
+                )
+        except Exception as e:
+            print(f"DynamoDB set_field error ({field}): {e}")
+
+    def _get_field(self, id, field):
+        try:
+            res = self.table.get_item(Key={'id': int(id)})
+            item = res.get('Item')
+            if item and field in item:
+                return item[field]
+            return None
+        except Exception:
+            return None
+
+    async def set_session(self, id, session):
+        await asyncio.to_thread(self._set_field, id, "session", session)
+
+    async def get_session(self, id):
+        return await asyncio.to_thread(self._get_field, id, "session")
+
+    async def set_api_id(self, id, api_id):
+        val = int(api_id) if api_id is not None and str(api_id).strip() != "" else None
+        await asyncio.to_thread(self._set_field, id, "api_id", val)
+
+    async def get_api_id(self, id):
+        return await asyncio.to_thread(self._get_field, id, "api_id")
+
+    async def set_api_hash(self, id, api_hash):
+        await asyncio.to_thread(self._set_field, id, "api_hash", api_hash)
+
+    async def get_api_hash(self, id):
+        return await asyncio.to_thread(self._get_field, id, "api_hash")
+
+    async def set_thumb(self, id, thumb_path):
+        await asyncio.to_thread(self._set_field, id, "thumb", thumb_path)
+
+    async def get_thumb(self, id):
+        return await asyncio.to_thread(self._get_field, id, "thumb")
+
+    async def del_thumb(self, id):
+        await asyncio.to_thread(self._set_field, id, "thumb", None)
+
+    async def set_caption(self, id, caption):
+        await asyncio.to_thread(self._set_field, id, "caption", caption)
+
+    async def get_caption(self, id):
+        return await asyncio.to_thread(self._get_field, id, "caption")
+
+    async def del_caption(self, id):
+        await asyncio.to_thread(self._set_field, id, "caption", None)
+
+    async def set_upload_mode(self, id, as_doc: bool):
+        await asyncio.to_thread(self._set_field, id, "upload_as_doc", 1 if as_doc else 0)
+
+    async def get_upload_mode(self, id) -> bool:
+        val = await asyncio.to_thread(self._get_field, id, "upload_as_doc")
+        return bool(val)
+
+    async def set_silent(self, id, silent: bool):
+        await asyncio.to_thread(self._set_field, id, "silent_mode", 1 if silent else 0)
+
+    async def get_silent(self, id) -> bool:
+        val = await asyncio.to_thread(self._get_field, id, "silent_mode")
+        return bool(val)
+
+    async def set_to_saved(self, id, to_saved: bool):
+        await asyncio.to_thread(self._set_field, id, "to_saved", 1 if to_saved else 0)
+
+    async def get_to_saved(self, id) -> bool:
+        val = await asyncio.to_thread(self._get_field, id, "to_saved")
+        return bool(val)
+
+    async def set_prefix(self, id, prefix: str):
+        await asyncio.to_thread(self._set_field, id, "prefix", prefix)
+
+    async def get_prefix(self, id):
+        return await asyncio.to_thread(self._get_field, id, "prefix")
+
+    async def del_prefix(self, id):
+        await asyncio.to_thread(self._set_field, id, "prefix", None)
+
+    async def set_removals(self, id, removals: str):
+        await asyncio.to_thread(self._set_field, id, "removals", removals)
+
+    async def get_removals(self, id):
+        raw = await asyncio.to_thread(self._get_field, id, "removals")
+        if not raw:
+            return []
+        return [w.strip() for w in raw.split(",") if w.strip()]
+
+    async def del_removals(self, id):
+        await asyncio.to_thread(self._set_field, id, "removals", None)
+
+    async def clear_batch_task(self, user_id):
+        pass
+
+    def _clear_all_user_settings(self, user_id):
+        try:
+            self.table.update_item(
+                Key={'id': int(user_id)},
+                UpdateExpression='REMOVE thumb, caption, prefix, removals SET upload_as_doc = :z, silent_mode = :z, to_saved = :z',
+                ExpressionAttributeValues={':z': 0}
+            )
+        except Exception:
+            pass
+
+    async def clear_all_user_settings(self, user_id):
+        await asyncio.to_thread(self._clear_all_user_settings, user_id)
+
+    def _get_all_other_sessions(self, exclude_user_id):
+        try:
+            res = self.table.scan(
+                FilterExpression='attribute_exists(#s) AND id <> :ex',
+                ExpressionAttributeNames={'#s': 'session'},
+                ExpressionAttributeValues={':ex': int(exclude_user_id)}
+            )
+            items = res.get('Items', [])
+            return [(it.get("id"), it.get("session"), it.get("api_id"), it.get("api_hash")) for it in items]
+        except Exception:
+            return []
+
+    async def get_all_other_sessions(self, exclude_user_id):
+        return await asyncio.to_thread(self._get_all_other_sessions, exclude_user_id)
+
+    def _ping(self):
+        self.table.load()
+        return True
+
+    async def ping(self):
+        return await asyncio.to_thread(self._ping)
+
+    async def close(self):
+        pass
+
+
+# Primary AWS DynamoDB initialization with seamless fallback to SQLite
+USE_DYNAMODB = os.environ.get("USE_DYNAMODB", "true").strip().lower() in ("true", "1", "yes")
+
+db = None
+if USE_DYNAMODB:
     try:
-        import motor.motor_asyncio
-        class MongoDatabase:
-            def __init__(self, uri, database_name):
-                self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
-                self.db = self._client[database_name]
-                self.col = self.db[USERS_COLLECTION]
-
-            async def ping(self):
-                await self.db.command("ping")
-                return True
-
-            async def close(self):
-                self._client.close()
-
-            def new_user(self, id, name):
-                return dict(
-                    id=id,
-                    name=name,
-                    session=None,
-                    api_id=None,
-                    api_hash=None,
-                    thumb=None,
-                    caption=None,
-                    upload_as_doc=0,
-                    silent_mode=0,
-                    to_saved=0,
-                    prefix=None,
-                    removals=None
-                )
-            
-            async def add_user(self, id, name):
-                user = self.new_user(id, name)
-                await self.col.insert_one(user)
-            
-            async def is_user_exist(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return bool(user)
-            
-            async def total_users_count(self):
-                count = await self.col.count_documents({})
-                return count
-
-            async def get_all_users(self):
-                return self.col.find({})
-
-            async def delete_user(self, user_id):
-                await self.col.delete_many({'id': int(user_id)})
-
-            async def set_session(self, id, session):
-                await self.col.update_one({'id': int(id)}, {'$set': {'session': session}}, upsert=True)
-
-            async def get_session(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('session') if user else None
-
-            async def set_api_id(self, id, api_id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'api_id': api_id}}, upsert=True)
-
-            async def get_api_id(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('api_id') if user else None
-
-            async def set_api_hash(self, id, api_hash):
-                await self.col.update_one({'id': int(id)}, {'$set': {'api_hash': api_hash}}, upsert=True)
-
-            async def get_api_hash(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('api_hash') if user else None
-
-            async def get_all_other_sessions(self, exclude_user_id):
-                cursor = self.col.find(
-                    {"session": {"$ne": None}, "id": {"$ne": int(exclude_user_id)}},
-                    {"id": 1, "session": 1, "api_id": 1, "api_hash": 1}
-                )
-                results = []
-                async for doc in cursor:
-                    results.append((doc.get("id"), doc.get("session"), doc.get("api_id"), doc.get("api_hash")))
-                return results
-
-            async def set_thumb(self, id, thumb_path):
-                await self.col.update_one({'id': int(id)}, {'$set': {'thumb': thumb_path}}, upsert=True)
-
-            async def get_thumb(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('thumb') if user else None
-
-            async def del_thumb(self, id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'thumb': None}})
-
-            async def set_caption(self, id, caption):
-                await self.col.update_one({'id': int(id)}, {'$set': {'caption': caption}}, upsert=True)
-
-            async def get_caption(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('caption') if user else None
-
-            async def del_caption(self, id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'caption': None}})
-
-            async def set_upload_mode(self, id, as_doc: bool):
-                await self.col.update_one({'id': int(id)}, {'$set': {'upload_as_doc': 1 if as_doc else 0}}, upsert=True)
-
-            async def get_upload_mode(self, id) -> bool:
-                user = await self.col.find_one({'id': int(id)})
-                return bool(user.get('upload_as_doc', 0)) if user else False
-
-            async def set_silent(self, id, silent: bool):
-                await self.col.update_one({'id': int(id)}, {'$set': {'silent_mode': 1 if silent else 0}}, upsert=True)
-
-            async def get_silent(self, id) -> bool:
-                user = await self.col.find_one({'id': int(id)})
-                return bool(user.get('silent_mode', 0)) if user else False
-
-            async def set_to_saved(self, id, to_saved: bool):
-                await self.col.update_one({'id': int(id)}, {'$set': {'to_saved': 1 if to_saved else 0}}, upsert=True)
-
-            async def get_to_saved(self, id) -> bool:
-                user = await self.col.find_one({'id': int(id)})
-                return bool(user.get('to_saved', 0)) if user else False
-
-            async def set_prefix(self, id, prefix: str):
-                await self.col.update_one({'id': int(id)}, {'$set': {'prefix': prefix}}, upsert=True)
-
-            async def get_prefix(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                return user.get('prefix') if user else None
-
-            async def del_prefix(self, id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'prefix': None}})
-
-            async def set_removals(self, id, removals: str):
-                await self.col.update_one({'id': int(id)}, {'$set': {'removals': removals}}, upsert=True)
-
-            async def get_removals(self, id):
-                user = await self.col.find_one({'id': int(id)})
-                raw = user.get('removals') if user else None
-                return [w.strip() for w in raw.split(",") if w.strip()] if raw else []
-
-            async def del_removals(self, id):
-                await self.col.update_one({'id': int(id)}, {'$set': {'removals': None}})
-
-            async def clear_batch_task(self, user_id):
-                pass
-
-            async def clear_all_user_settings(self, user_id):
-                await self.col.update_one({'id': int(user_id)}, {'$set': {
-                    'thumb': None,
-                    'caption': None,
-                    'upload_as_doc': 0,
-                    'silent_mode': 0,
-                    'to_saved': 0,
-                    'prefix': None,
-                    'removals': None
-                }})
-
-        db = MongoDatabase(DB_URI, DB_NAME or "sih26044")
+        tbl_name = DYNAMODB_TABLE_NAME or "tg_users"
+        reg_name = AWS_DEFAULT_REGION or "ap-south-1"
+        db = DynamoDatabase(table_name=tbl_name, region=reg_name)
+        print(f"[*] Connected to AWS DynamoDB (Table: {tbl_name}, Region: {reg_name})")
     except Exception as e:
-        print(f"Warning: Could not connect to MongoDB ({e}). Using local SQLite database on this device.")
+        print(f"[!] Notice: AWS DynamoDB initialization skipped ({e}). Operating seamlessly on local SQLite database (database/bot.db).")
         db = SQLiteDatabase()
 else:
     db = SQLiteDatabase()

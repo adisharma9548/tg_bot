@@ -2,6 +2,7 @@ import os
 import time
 import shutil
 import asyncio 
+import uuid
 import pyrogram
 from pyrogram import Client, filters, enums
 from pyrogram.errors import (
@@ -35,13 +36,27 @@ from plugins.organizer import (
     AuditTracker,
     get_message_type
 )
-from plugins.ytdl import is_web_url, download_web_media
+from plugins.ytdl import is_web_url, download_web_media, probe_web_media
 from bot import UserClient
 
 DOWNLOAD_DIR = "downloads"
 THUMB_DIR = "database/thumbs"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
+
+def check_disk_space(required_bytes: int = 0, path: str = DOWNLOAD_DIR, buffer_bytes: int = 250 * 1024 * 1024) -> tuple[bool, int, int]:
+    """
+    Validates that the disk partition hosting `path` has enough free space
+    for `required_bytes` plus a 250 MB safety margin.
+    Returns (has_space: bool, free_bytes: int, total_bytes: int).
+    """
+    try:
+        usage = shutil.disk_usage(os.path.abspath(path))
+        has_space = usage.free >= (required_bytes + buffer_bytes)
+        return has_space, usage.free, usage.total
+    except Exception:
+        return True, 0, 0
+
 
 class TaskManager:
     """
@@ -1321,6 +1336,18 @@ async def handle_media(client: Client, acc, message: Message, chatid, msgid: int
     filename = None
 
     try:
+        # Pre-download disk space validation
+        media_obj = getattr(msg, msg_type.lower(), None) if msg_type else None
+        media_size = getattr(media_obj, 'file_size', 0) if media_obj else 0
+        has_space, free_bytes, _ = check_disk_space(media_size)
+        if not has_space:
+            await smsg.edit_text(
+                f"⚠️ **Insufficient Disk Space!**\n"
+                f"The server requires at least `{humanbytes(media_size + 250*1024*1024)}` free storage, but only `{humanbytes(free_bytes)}` is available.\n"
+                f"Download aborted safely to prevent server exhaustion."
+            )
+            return (False, None, None, None, None)
+
         # Download any media type with in-memory progress bar
         file = await acc.download_media(
             msg, 
@@ -1339,34 +1366,9 @@ async def handle_media(client: Client, acc, message: Message, chatid, msgid: int
                     pass
             return (False, None, None, None, None)
 
-        prefix = await db.get_prefix(message.from_user.id)
-        removals = await db.get_removals(message.from_user.id)
-        orig_basename = os.path.basename(file)
-        orig_caption = msg.caption or msg.text or ""
-
-        # Smart course organizer: extracts serial, title, and part across ANY topic/course
-        serial, title, part = parse_course_metadata(orig_caption, orig_basename)
-        organized_name = format_organized_filename(orig_caption, orig_basename, prefix=prefix, custom_removals=removals)
-
-        if organized_name != orig_basename:
-            file_dir = os.path.dirname(file)
-            new_file_path = os.path.join(file_dir, organized_name)
-            try:
-                if os.path.exists(new_file_path) and new_file_path != file:
-                    os.remove(new_file_path)
-                os.rename(file, new_file_path)
-                file = new_file_path
-            except Exception:
-                file = rename_file_clean(file, prefix=prefix, custom_removals=removals)
-        else:
-            file = rename_file_clean(file, prefix=prefix, custom_removals=removals)
-
+        # Strict 1:1 original mirror: Preserve exact original filename and original caption
         filename = os.path.basename(file)
-        filesize = humanbytes(os.path.getsize(file))
-
-        # Caption formatting: custom template if set, else organized caption
-        user_caption_tmpl = await db.get_caption(message.from_user.id)
-        caption = format_organized_caption(orig_caption, filename, filesize, custom_tmpl=user_caption_tmpl)
+        caption = msg.caption if msg.caption is not None else None
 
         # Thumbnail management (applies to Document, Video, Audio)
         user_thumb = await db.get_thumb(message.from_user.id)
@@ -1377,10 +1379,10 @@ async def handle_media(client: Client, acc, message: Message, chatid, msgid: int
                 media_obj = getattr(msg, msg_type.lower(), None)
                 if media_obj and hasattr(media_obj, 'thumbs') and media_obj.thumbs:
                     ph_path = await acc.download_media(media_obj.thumbs[0].file_id)
-            except:
+                else:
+                    ph_path = None
+            except Exception:
                 ph_path = None
-            if not ph_path and os.path.exists(DEFAULT_THUMB):
-                ph_path = DEFAULT_THUMB
 
         upload_as_doc = await db.get_upload_mode(message.from_user.id)
         up_start_time = time.time()
@@ -1593,6 +1595,19 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
             final_filename = None
 
             try:
+                # Pre-download disk space validation
+                media_obj = getattr(msg, m_type.lower(), None) if m_type else None
+                media_size = getattr(media_obj, 'file_size', 0) if media_obj else 0
+                has_space, free_bytes, _ = check_disk_space(media_size)
+                if not has_space:
+                    await status_msg.edit_text(
+                        f"⚠️ **Batch paused: Low disk space**\n"
+                        f"Cannot safely process item `{idx}/{total_items}` ({humanbytes(media_size)}).\n"
+                        f"Available disk space: `{humanbytes(free_bytes)}`."
+                    )
+                    tracker.record_item(msg.id, "", "", "", f"post_{msg.id}", "disk_space_insufficient")
+                    break
+
                 # Update status message for current item
                 dl_label = f"📥 Downloading [{idx}/{total_items}]"
                 start_time = time.time()
@@ -1613,27 +1628,10 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
 
                 TaskManager.register_file(message.from_user.id, file)
 
-                orig_basename = os.path.basename(file)
-                orig_caption = msg.caption or msg.text or ""
-                item_serial, item_title, item_part = parse_course_metadata(orig_caption, orig_basename)
-                organized_name = format_organized_filename(orig_caption, orig_basename, prefix=prefix, custom_removals=removals)
-
-                if organized_name != orig_basename:
-                    file_dir = os.path.dirname(file)
-                    new_file_path = os.path.join(file_dir, organized_name)
-                    try:
-                        if os.path.exists(new_file_path) and new_file_path != file:
-                            os.remove(new_file_path)
-                        os.rename(file, new_file_path)
-                        file = new_file_path
-                    except Exception:
-                        file = rename_file_clean(file, prefix=prefix, custom_removals=removals)
-                else:
-                    file = rename_file_clean(file, prefix=prefix, custom_removals=removals)
-
+                # Strict 1:1 original mirror: Exact original filename and original caption
                 final_filename = os.path.basename(file)
                 filesize = humanbytes(os.path.getsize(file))
-                caption = format_organized_caption(orig_caption, final_filename, filesize, custom_tmpl=user_caption_tmpl)
+                caption = msg.caption if msg.caption is not None else None
 
                 # Thumbnail resolution
                 if user_thumb and os.path.exists(user_thumb):
@@ -1643,10 +1641,10 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
                         media_obj = getattr(msg, m_type.lower(), None)
                         if media_obj and hasattr(media_obj, 'thumbs') and media_obj.thumbs:
                             ph_path = await acc.download_media(media_obj.thumbs[0].file_id)
+                        else:
+                            ph_path = None
                     except Exception:
                         ph_path = None
-                    if not ph_path and os.path.exists(DEFAULT_THUMB):
-                        ph_path = DEFAULT_THUMB
 
                 up_label = f"📤 Uploading [{idx}/{total_items}]"
                 up_start_time = time.time()
@@ -1764,83 +1762,232 @@ async def run_topic_crawl(client: Client, message: Message, chat_id: int, topic_
 
 
 # Handle External Web URLs (YouTube, Instagram, X/Twitter, direct links)
+YTDL_PENDING = {}
+
 async def handle_web_url(client: Client, message: Message):
-    TaskManager.start_task(message.from_user.id, "web_download")
-    smsg = await client.send_message(message.chat.id, "🌐 **Downloading media with yt-dlp...**", reply_to_message_id=message.id)
-    file = None
-    ph_path = None
-    dest = await get_destination(client, message)
-    silent = await db.get_silent(message.from_user.id)
-    upload_as_doc = await db.get_upload_mode(message.from_user.id)
+    if TaskManager.is_user_busy(message.from_user.id):
+        cancel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Ongoing Task", callback_data="task_cancel")]])
+        await message.reply_text(
+            f"⚠️ **Another task is already in progress.**\n\n"
+            f"• Please wait until your ongoing task finishes.\n"
+            f"• Or tap below to cancel it immediately.\n\n"
+            f"💡 *Strict single-task policy is active to protect server storage.*",
+            reply_markup=cancel_markup,
+            quote=True
+        )
+        return
+
+    url = message.text.strip()
+    smsg = await client.send_message(
+        message.chat.id, 
+        "🔎 **Analyzing media link & probing available qualities...**", 
+        reply_to_message_id=message.id
+    )
 
     try:
-        file, title, duration = await download_web_media(message.text.strip(), DOWNLOAD_DIR)
-        if file:
-            TaskManager.register_file(message.from_user.id, file)
+        info = await probe_web_media(url)
+    except Exception as e:
+        await smsg.edit_text(f"❌ **Failed to process media link:**\n`{e}`")
+        return
 
-        if TaskManager.is_cancelled(message.from_user.id):
+    qid = uuid.uuid4().hex[:8]
+    title = info.get("title", "Media")
+    duration = info.get("duration", 0)
+    heights = info.get("heights", [])
+    extractor = info.get("extractor", "Web")
+
+    YTDL_PENDING[qid] = {
+        "url": url,
+        "user_id": message.from_user.id,
+        "title": title,
+        "duration": duration,
+        "created_at": time.time(),
+        "orig_msg_id": message.id
+    }
+
+    buttons = []
+    # Video resolution buttons
+    quality_row = []
+    for h in heights:
+        label = f"🎬 {h}p (MP4)"
+        cb = f"ytdl_{qid}_mp4_{h}"
+        quality_row.append(InlineKeyboardButton(label, callback_data=cb))
+        if len(quality_row) == 2:
+            buttons.append(quality_row)
+            quality_row = []
+    if quality_row:
+        buttons.append(quality_row)
+
+    # Best MP4 fallback button
+    buttons.append([InlineKeyboardButton("🎬 Best Quality (MP4)", callback_data=f"ytdl_{qid}_mp4_best")])
+    # Audio extraction button (MP3)
+    buttons.append([InlineKeyboardButton("🎵 MP3 Audio (Best Quality)", callback_data=f"ytdl_{qid}_mp3_best")])
+    # Cancel button
+    buttons.append([InlineKeyboardButton("🛑 Cancel", callback_data=f"ytdl_{qid}_cancel_0")])
+
+    dur_str = time_formatter(duration) if duration else "Unknown"
+    text = (
+        f"🎬 **{title}**\n\n"
+        f"⏱ **Duration:** `{dur_str}`\n"
+        f"🌐 **Platform:** `{extractor}`\n\n"
+        f"👇 **Choose desired format & quality:**"
+    )
+    await smsg.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+@Client.on_callback_query(filters.regex(r"^ytdl_"))
+async def on_ytdl_format_selected(client: Client, query: CallbackQuery):
+    parts = query.data.split("_")
+    # Expected format: ["ytdl", qid, format_type, quality]
+    if len(parts) < 4:
+        await query.answer("Invalid request.", show_alert=True)
+        return
+
+    _, qid, fmt_type, quality = parts[0], parts[1], parts[2], parts[3]
+    task_info = YTDL_PENDING.get(qid)
+    if not task_info:
+        await query.answer("⚠️ This menu has expired. Please send the link again.", show_alert=True)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        return
+
+    if query.from_user.id != task_info["user_id"]:
+        await query.answer("⚠️ This menu was opened by another user.", show_alert=True)
+        return
+
+    if fmt_type == "cancel":
+        YTDL_PENDING.pop(qid, None)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await query.answer("Download cancelled.")
+        return
+
+    user_id = query.from_user.id
+    if TaskManager.is_user_busy(user_id):
+        await query.answer("⚠️ Another task is already in progress. Please wait or use /cancel.", show_alert=True)
+        return
+
+    TaskManager.start_task(user_id, "web_download")
+    await query.answer(f"Selected: {fmt_type.upper()} ({quality}). Starting download...")
+
+    url = task_info["url"]
+    smsg = query.message
+    cancel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Task", callback_data="task_cancel")]])
+    await smsg.edit_text(
+        f"📩 **Downloading {fmt_type.upper()} ({quality})...**\n\n"
+        f"🎬 **{task_info.get('title', 'Media')}**",
+        reply_markup=cancel_markup
+    )
+
+    file = None
+    ph_path = None
+    to_saved = await db.get_to_saved(user_id)
+    if CHANNEL_ID:
+        try:
+            dest = int(CHANNEL_ID)
+        except Exception:
+            dest = user_id if to_saved else smsg.chat.id
+    else:
+        dest = user_id if to_saved else smsg.chat.id
+
+    silent = await db.get_silent(user_id)
+    upload_as_doc = await db.get_upload_mode(user_id)
+
+    try:
+        has_space, free_bytes, _ = check_disk_space(required_bytes=250 * 1024 * 1024)
+        if not has_space:
+            await smsg.edit_text(
+                f"⚠️ **Insufficient Disk Space!**\n"
+                f"The server is running low on disk space (`{humanbytes(free_bytes)}` free).\n"
+                f"Download aborted safely to prevent server exhaustion."
+            )
             return
-        
-        prefix = await db.get_prefix(message.from_user.id)
-        removals = await db.get_removals(message.from_user.id)
+
+        file, title, duration = await download_web_media(url, DOWNLOAD_DIR, format_type=fmt_type, quality=quality)
+        if file:
+            TaskManager.register_file(user_id, file)
+
+        if TaskManager.is_cancelled(user_id):
+            return
+
+        prefix = await db.get_prefix(user_id)
+        removals = await db.get_removals(user_id)
         file = rename_file_clean(file, prefix=prefix, custom_removals=removals)
         if file:
-            TaskManager.register_file(message.from_user.id, file)
+            TaskManager.register_file(user_id, file)
 
         filename = os.path.basename(file)
         filesize = humanbytes(os.path.getsize(file))
 
-        user_caption_tmpl = await db.get_caption(message.from_user.id)
+        user_caption_tmpl = await db.get_caption(user_id)
         if user_caption_tmpl:
             caption = user_caption_tmpl.replace("{filename}", filename).replace("{size}", filesize).replace("{caption}", title)
         else:
-            caption = f"🎬 **{filename}**\n📁 `{filesize}`"
+            icon = "🎵" if fmt_type == "mp3" else "🎬"
+            caption = f"{icon} **{filename}**\n📁 `{filesize}`"
 
-        user_thumb = await db.get_thumb(message.from_user.id)
+        user_thumb = await db.get_thumb(user_id)
         if user_thumb and os.path.exists(user_thumb):
             ph_path = user_thumb
         elif os.path.exists(DEFAULT_THUMB):
             ph_path = DEFAULT_THUMB
 
         up_start = time.time()
-        is_video = file.lower().endswith(('.mp4', '.mkv', '.webm', '.mov'))
 
-        if is_video and not upload_as_doc:
-            await client.send_video(
-                dest, 
-                file, 
-                duration=int(duration or 0), 
-                thumb=ph_path, 
-                caption=caption, 
+        if fmt_type == "mp3":
+            await client.send_audio(
+                dest,
+                file,
+                title=title,
+                duration=int(duration or 0),
+                thumb=ph_path,
+                caption=caption,
                 parse_mode=enums.ParseMode.HTML,
-                disable_notification=silent, 
-                progress=progress_for_pyrogram, 
-                progress_args=("📤 Uploading", smsg, up_start)
+                disable_notification=silent,
+                progress=progress_for_pyrogram,
+                progress_args=("📤 Uploading Audio", smsg, up_start)
+            )
+        elif not upload_as_doc:
+            await client.send_video(
+                dest,
+                file,
+                duration=int(duration or 0),
+                thumb=ph_path,
+                caption=caption,
+                parse_mode=enums.ParseMode.HTML,
+                disable_notification=silent,
+                progress=progress_for_pyrogram,
+                progress_args=("📤 Uploading Video", smsg, up_start)
             )
         else:
             await client.send_document(
-                dest, 
-                file, 
-                thumb=ph_path, 
-                caption=caption, 
+                dest,
+                file,
+                thumb=ph_path,
+                caption=caption,
                 parse_mode=enums.ParseMode.HTML,
-                disable_notification=silent, 
-                progress=progress_for_pyrogram, 
-                progress_args=("📤 Uploading", smsg, up_start)
+                disable_notification=silent,
+                progress=progress_for_pyrogram,
+                progress_args=("📤 Uploading Document", smsg, up_start)
             )
 
     except Exception as e:
-        await client.send_message(message.chat.id, f"❌ **Web download error:** `{e}`")
+        await client.send_message(smsg.chat.id, f"❌ **Web download error:** `{e}`")
     finally:
-        TaskManager.finish_task(message.from_user.id)
+        TaskManager.finish_task(user_id)
+        YTDL_PENDING.pop(qid, None)
         if file and os.path.exists(file):
             try:
                 os.remove(file)
-            except:
+            except Exception:
                 pass
         try:
             await smsg.delete()
-        except:
+        except Exception:
             pass
 
 

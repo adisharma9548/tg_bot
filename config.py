@@ -37,11 +37,10 @@ else:
 # Optional Channel ID to upload downloaded content to (leave blank to send directly to user)
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
-# Database Configuration (Supports both MongoDB Atlas and SQLite fallback)
-MONGODB_URI = (os.environ.get("MONGODB_URI") or os.environ.get("DB_URI", "")).strip()
-DB_URI = MONGODB_URI
-DB_NAME = os.environ.get("DB_NAME", "sih26044").strip()
-USERS_COLLECTION = os.environ.get("USERS_COLLECTION", "tg_users").strip()
+# AWS Cloud Infrastructure Configuration
+AWS_DEFAULT_REGION = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "ap-south-1"
+DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME") or os.environ.get("AWS_DYNAMODB_TABLE") or "tg_users"
+S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "").strip()
 
 # Delay in seconds to prevent Telegram flood wait limits
 wait_time_val = os.environ.get("WAITING_TIME", "10").strip()
@@ -50,14 +49,6 @@ WAITING_TIME = int(wait_time_val) if wait_time_val.isdigit() else 10
 # Send error messages in chat
 err_msg_val = os.environ.get('ERROR_MESSAGE', 'True').strip().lower()
 ERROR_MESSAGE = err_msg_val in ('true', '1', 'yes')
-
-
-def mask_mongodb_uri(uri: str) -> str:
-    """Masks credentials in MongoDB URI for safe logging."""
-    if not uri:
-        return "<not set>"
-    import re
-    return re.sub(r":([^@]+)@", r":****@", uri)
 
 
 def validate_config():

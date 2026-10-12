@@ -11,7 +11,7 @@ import threading
 import signal
 import time
 from guard import verify_environment, print_banner
-from config import validate_config, mask_mongodb_uri, MONGODB_URI
+from config import validate_config, DYNAMODB_TABLE_NAME, AWS_DEFAULT_REGION
 from app import app
 from bot import Bot
 
@@ -45,7 +45,7 @@ def main():
     # Small pause to ensure web server socket is bound
     time.sleep(1)
     print(f"[AWS Runner] Web health endpoint active at http://0.0.0.0:{web_port}/health", flush=True)
-    print(f"[AWS Runner] Database target: {mask_mongodb_uri(MONGODB_URI)}", flush=True)
+    print(f"[AWS Runner] Database target: AWS DynamoDB ({DYNAMODB_TABLE_NAME} in {AWS_DEFAULT_REGION})", flush=True)
     print("[AWS Runner] Launching Pyrogram Telegram Bot Client...", flush=True)
 
     # 4. Initialize and run Pyrogram Bot Client
