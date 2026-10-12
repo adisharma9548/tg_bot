@@ -1,0 +1,21 @@
+[Unit]
+Description=Telegram Save Restricted Content Bot (AWS Edition)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/tg_bot/theaditya
+EnvironmentFile=/home/ubuntu/tg_bot/theaditya/.env
+ExecStart=/home/ubuntu/tg_bot/theaditya/venv/bin/python3 runner.py
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+
+# Hardening
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/tg_bot/theaditya/downloads /home/ubuntu/tg_bot/theaditya/database
+
+[Install]
+WantedBy=multi-user.target

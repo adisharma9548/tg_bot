@@ -4,7 +4,10 @@ import time
 
 def clean_filename(filename: str, prefix: str = "", custom_removals: list = None) -> str:
     """Cleans annoying channel usernames, ads, and phrases from filename while preserving extension."""
-    if not filename or "." not in filename:
+    if not filename:
+        return "file"
+    filename = os.path.basename(filename.strip().replace("\\", "/"))
+    if "." not in filename:
         return filename or "file"
 
     stem, ext = filename.rsplit(".", 1)

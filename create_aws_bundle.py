@@ -26,7 +26,9 @@ INCLUDE_FILES = [
     "requirements.txt",
     "docker-compose.yml",
     "README.md",
-    "logo.jpg"
+    "logo.jpg",
+    "tgbot.service",
+    "setup_ubuntu_ec2.sh"
 ]
 
 EXCLUDE_EXTS = [

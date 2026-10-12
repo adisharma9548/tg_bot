@@ -60,9 +60,8 @@ def configure_sqlite_pragmas():
 configure_sqlite_pragmas()
 
 
-if STRING_SESSION is not None and LOGIN_SYSTEM == False:
+if STRING_SESSION and LOGIN_SYSTEM == False:
     UserClient = Client("user_session", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION, in_memory=True)
-    UserClient.start()
 else:
     UserClient = None
 
@@ -90,6 +89,11 @@ class Bot(Client):
             await db.ping()
         except Exception as e:
             print(f"Database ping warning: {e}", flush=True)
+        if UserClient and not UserClient.is_connected:
+            try:
+                await UserClient.start()
+            except Exception as e:
+                print(f"UserClient start error: {e}", flush=True)
         await super().start()
         print('Bot Started Successfully', flush=True)
 
@@ -98,6 +102,11 @@ class Bot(Client):
             await db.close()
         except Exception:
             pass
+        if UserClient and UserClient.is_connected:
+            try:
+                await UserClient.stop()
+            except Exception:
+                pass
         await super().stop()
         print('Bot Stopped Bye', flush=True)
 

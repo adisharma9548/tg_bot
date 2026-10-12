@@ -174,6 +174,38 @@ class TestAWSArchitecture(unittest.TestCase):
         self.assertIn("database", data)
         self.assertEqual(data["service"], "Save Restricted Content Bot")
 
+    def test_08_filename_cleaner_and_path_traversal(self):
+        """Test filename cleaning and path traversal protection."""
+        from plugins.cleaner import clean_filename
+
+        # Test normal clean
+        dirty = "@channel_name [cracked by anonymous] Lecture_1.mp4"
+        cleaned = clean_filename(dirty)
+        self.assertNotIn("@channel_name", cleaned)
+        self.assertNotIn("cracked", cleaned)
+        self.assertTrue(cleaned.endswith(".mp4"))
+
+        # Test path traversal prevention
+        traversal = "../../etc/passwd.mp4"
+        safe_name = clean_filename(traversal)
+        self.assertNotIn("..", safe_name)
+        self.assertNotIn("/", safe_name)
+        self.assertEqual(safe_name, "passwd.mp4")
+
+    def test_09_startup_orphaned_download_cleanup(self):
+        """Test that orphaned temporary downloads are cleanly purged on startup."""
+        from plugins.start import cleanup_orphaned_downloads
+
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+        orphan_path = os.path.join(DOWNLOAD_DIR, "orphan_test_file.tmp")
+        with open(orphan_path, "w") as f:
+            f.write("stale orphaned download data")
+
+        self.assertTrue(os.path.exists(orphan_path))
+        cleanup_orphaned_downloads()
+        self.assertFalse(os.path.exists(orphan_path), "Orphaned temporary files must be purged")
+
 
 if __name__ == "__main__":
     unittest.main()
+

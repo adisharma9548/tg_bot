@@ -44,6 +44,21 @@ THUMB_DIR = "database/thumbs"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
 
+def cleanup_orphaned_downloads():
+    """Sweeps orphaned temporary files from downloads/ on startup or restart."""
+    if os.path.exists(DOWNLOAD_DIR):
+        for f in os.listdir(DOWNLOAD_DIR):
+            fpath = os.path.join(DOWNLOAD_DIR, f)
+            try:
+                if os.path.isfile(fpath) or os.path.islink(fpath):
+                    os.remove(fpath)
+                elif os.path.isdir(fpath):
+                    shutil.rmtree(fpath, ignore_errors=True)
+            except Exception:
+                pass
+
+cleanup_orphaned_downloads()
+
 def check_disk_space(required_bytes: int = 0, path: str = DOWNLOAD_DIR, buffer_bytes: int = 250 * 1024 * 1024) -> tuple[bool, int, int]:
     """
     Validates that the disk partition hosting `path` has enough free space
